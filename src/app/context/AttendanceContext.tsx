@@ -9,6 +9,23 @@ import React, {
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { useAuth } from "./AuthContext";
+import {
+  clearWorkspaceAttendanceData,
+  deleteAbsencesByMonthFromDatabase,
+  deleteAttendanceAdjustmentsByDates,
+  deleteExemptionRecord,
+  deleteExemptionsByMonthFromDatabase,
+  deleteManualUndertimeRecord,
+  deleteManualUndertimesByMonthFromDatabase,
+  deleteUploadedAttendanceFile,
+  loadAttendanceData,
+  saveAbsenceRecord,
+  saveExemptionRecord,
+  saveManualUndertimeRecord,
+  saveMemoReads,
+  saveUploadedAttendanceFile,
+} from "../services/attendanceService";
+
 
 export interface LateRecord {
   id: string;
@@ -271,21 +288,48 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   const [selectedDayScope, setSelectedDayScope] = useState<string>("all");
   const [isStorageHydrated, setIsStorageHydrated] = useState(false);
 
+  const applyDatabaseData = async (loadFilterState = false) => {
+    if (!workspace) return;
+
+    const dbData = await loadAttendanceData(workspace);
+    const localData = getStoredData(storageKey);
+
+    setFileName(dbData.fileName);
+    setUploadedFiles(dbData.uploadedFiles);
+    setExemptions(dbData.exemptions);
+    setAbsences(dbData.absences);
+    setManualUndertimes(dbData.manualUndertimes);
+    setReadMemoEmployeeNames(dbData.readMemoEmployeeNames);
+
+    if (loadFilterState) {
+      setSelectedMonthScope(localData.selectedMonthScope || "all");
+      setSelectedDayScope(localData.selectedDayScope || "all");
+    }
+  };
+
   useEffect(() => {
-    if (authLoading || !storageKey) return;
+    if (authLoading || !workspace) return;
 
-    const initialData = getStoredData(storageKey);
+    let isMounted = true;
 
-    setFileName(initialData.fileName);
-    setUploadedFiles(initialData.uploadedFiles);
-    setExemptions(initialData.exemptions);
-    setAbsences(initialData.absences);
-    setManualUndertimes(initialData.manualUndertimes);
-    setReadMemoEmployeeNames(initialData.readMemoEmployeeNames);
-    setSelectedMonthScope(initialData.selectedMonthScope || "all");
-    setSelectedDayScope(initialData.selectedDayScope || "all");
-    setIsStorageHydrated(true);
-  }, [authLoading, storageKey]);
+    async function loadInitialData() {
+      try {
+        await applyDatabaseData(true);
+      } catch (error) {
+        console.error("Failed to load attendance data from Supabase:", error);
+      } finally {
+        if (isMounted) {
+          setIsStorageHydrated(true);
+        }
+      }
+    }
+
+    void loadInitialData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authLoading, workspace, storageKey]);
 
   useEffect(() => {
     if (
@@ -298,12 +342,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const payload: PersistedAttendanceData = {
-      fileName,
-      uploadedFiles,
-      exemptions: exemptionsState,
-      absences: absencesState,
-      manualUndertimes: manualUndertimesState,
-      readMemoEmployeeNames,
+      ...getDefaultStoredData(),
       selectedMonthScope,
       selectedDayScope,
     };
@@ -313,12 +352,6 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     authLoading,
     storageKey,
     isStorageHydrated,
-    fileName,
-    uploadedFiles,
-    exemptionsState,
-    absencesState,
-    manualUndertimesState,
-    readMemoEmployeeNames,
     selectedMonthScope,
     selectedDayScope,
   ]);
@@ -508,172 +541,184 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!workspace) {
+      alert("Please login first before uploading attendance files.");
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onload = (event) => {
-      try {
-        const data = event.target?.result;
-        const workbook = XLSX.read(data, { type: "binary" });
+      void (async () => {
+        try {
+          const data = event.target?.result;
+          const workbook = XLSX.read(data, { type: "binary" });
 
-        const newFileId = createId();
-        const parsedLateRecords: LateRecord[] = [];
-        const parsedGeneratedUndertime: GeneratedUndertime[] = [];
+          const newFileId = createId();
+          const parsedLateRecords: LateRecord[] = [];
+          const parsedGeneratedUndertime: GeneratedUndertime[] = [];
 
-        const allExistingLateKeys = new Set(
-          uploadedFiles.flatMap((uploadedFile) =>
-            uploadedFile.lateRecords.map((record) =>
-              makeRecordKey(record.name, record.date, record.timeIn)
+          const allExistingLateKeys = new Set(
+            uploadedFiles.flatMap((uploadedFile) =>
+              uploadedFile.lateRecords.map((record) =>
+                makeRecordKey(record.name, record.date, record.timeIn)
+              )
             )
-          )
-        );
+          );
 
-        const allExistingUndertimeKeys = new Set(
-          uploadedFiles.flatMap((uploadedFile) =>
-            uploadedFile.generatedUndertimes.map((record) =>
-              makeRecordKey(record.name, record.date, record.timeIn)
+          const allExistingUndertimeKeys = new Set(
+            uploadedFiles.flatMap((uploadedFile) =>
+              uploadedFile.generatedUndertimes.map((record) =>
+                makeRecordKey(record.name, record.date, record.timeIn)
+              )
             )
-          )
-        );
+          );
 
-        workbook.SheetNames.forEach((sheetName) => {
-          const worksheet = workbook.Sheets[sheetName];
-          const jsonData: unknown[] = XLSX.utils.sheet_to_json(worksheet, {
-            header: 1,
+          workbook.SheetNames.forEach((sheetName) => {
+            const worksheet = workbook.Sheets[sheetName];
+            const jsonData: unknown[] = XLSX.utils.sheet_to_json(worksheet, {
+              header: 1,
+            });
+
+            for (let i = 4; i < jsonData.length; i += 1) {
+              const row = jsonData[i] as unknown[];
+
+              if (!row?.[2] || !row?.[4]) continue;
+
+              const name = String(row[2]).trim();
+              const dateTime = new Date(row[4] as string | number | Date);
+
+              if (!name || Number.isNaN(dateTime.getTime())) continue;
+
+              const dayOfWeek = dateTime.getDay();
+              const hours = dateTime.getHours();
+              const minutes = dateTime.getMinutes();
+              const seconds = dateTime.getSeconds();
+              const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+
+              let isLate = false;
+              let isUndertime = false;
+              let minutesLate = 0;
+              let secondsLate = 0;
+              let totalSecondsLateValue = 0;
+
+              if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+                const officialTime = 8 * 3600;
+                const lateStart = 8 * 3600 + 6 * 60;
+
+                const exactHourUndertime =
+                  minutes === 0 &&
+                  seconds === 0 &&
+                  (hours === 9 || hours === 10 || hours === 11);
+
+                const afternoonUndertime =
+                  totalSeconds >= 12 * 3600 && totalSeconds <= 17 * 3600;
+
+                if (exactHourUndertime || afternoonUndertime) {
+                  isUndertime = true;
+                } else if (totalSeconds >= lateStart) {
+                  isLate = true;
+                  totalSecondsLateValue = totalSeconds - officialTime;
+                  minutesLate = Math.floor(totalSecondsLateValue / 60);
+                  secondsLate = totalSecondsLateValue % 60;
+                }
+              } else if (dayOfWeek === 6) {
+                const officialTime = 7 * 3600;
+                const lateStart = 7 * 3600 + 6 * 60;
+
+                const exactHourUndertime =
+                  minutes === 0 &&
+                  seconds === 0 &&
+                  (hours === 8 || hours === 9 || hours === 10 || hours === 11);
+
+                const afternoonUndertime =
+                  totalSeconds >= 12 * 3600 && totalSeconds <= 17 * 3600;
+
+                if (exactHourUndertime || afternoonUndertime) {
+                  isUndertime = true;
+                } else if (totalSeconds >= lateStart) {
+                  isLate = true;
+                  totalSecondsLateValue = totalSeconds - officialTime;
+                  minutesLate = Math.floor(totalSecondsLateValue / 60);
+                  secondsLate = totalSecondsLateValue % 60;
+                }
+              }
+
+              const timeIn = dateTime.toLocaleTimeString("en-US");
+              const dateStr = dateTime.toLocaleDateString("en-US");
+              const recordKey = makeRecordKey(name, dateStr, timeIn);
+
+              if (isUndertime) {
+                if (!allExistingUndertimeKeys.has(recordKey)) {
+                  allExistingUndertimeKeys.add(recordKey);
+                  parsedGeneratedUndertime.push({
+                    id: createId(),
+                    name,
+                    date: dateStr,
+                    timeIn,
+                    sourceFileId: newFileId,
+                    sourceFileName: file.name,
+                  });
+                }
+              } else if (isLate) {
+                if (!allExistingLateKeys.has(recordKey)) {
+                  allExistingLateKeys.add(recordKey);
+                  parsedLateRecords.push({
+                    id: createId(),
+                    name,
+                    date: dateStr,
+                    timeIn,
+                    minutesLate,
+                    secondsLate,
+                    totalSecondsLate: totalSecondsLateValue,
+                    sourceFileId: newFileId,
+                    sourceFileName: file.name,
+                  });
+                }
+              }
+            }
           });
 
-          for (let i = 4; i < jsonData.length; i += 1) {
-            const row = jsonData[i] as unknown[];
+          if (parsedLateRecords.length === 0 && parsedGeneratedUndertime.length === 0) {
+            alert("No late or undertime records were found in this file.");
 
-            if (!row?.[2] || !row?.[4]) continue;
-
-            const name = String(row[2]).trim();
-            const dateTime = new Date(row[4] as string | number | Date);
-
-            if (!name || Number.isNaN(dateTime.getTime())) continue;
-
-            const dayOfWeek = dateTime.getDay();
-            const hours = dateTime.getHours();
-            const minutes = dateTime.getMinutes();
-            const seconds = dateTime.getSeconds();
-            const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-
-            let isLate = false;
-            let isUndertime = false;
-            let minutesLate = 0;
-            let secondsLate = 0;
-            let totalSecondsLateValue = 0;
-
-            if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-              const officialTime = 8 * 3600;
-              const lateStart = 8 * 3600 + 6 * 60;
-
-              const exactHourUndertime =
-                minutes === 0 &&
-                seconds === 0 &&
-                (hours === 9 || hours === 10 || hours === 11);
-
-              const afternoonUndertime =
-                totalSeconds >= 12 * 3600 && totalSeconds <= 17 * 3600;
-
-              if (exactHourUndertime || afternoonUndertime) {
-                isUndertime = true;
-              } else if (totalSeconds >= lateStart) {
-                isLate = true;
-                totalSecondsLateValue = totalSeconds - officialTime;
-                minutesLate = Math.floor(totalSecondsLateValue / 60);
-                secondsLate = totalSecondsLateValue % 60;
-              }
-            } else if (dayOfWeek === 6) {
-              const officialTime = 7 * 3600;
-              const lateStart = 7 * 3600 + 6 * 60;
-
-              const exactHourUndertime =
-                minutes === 0 &&
-                seconds === 0 &&
-                (hours === 8 || hours === 9 || hours === 10 || hours === 11);
-
-              const afternoonUndertime =
-                totalSeconds >= 12 * 3600 && totalSeconds <= 17 * 3600;
-
-              if (exactHourUndertime || afternoonUndertime) {
-                isUndertime = true;
-              } else if (totalSeconds >= lateStart) {
-                isLate = true;
-                totalSecondsLateValue = totalSeconds - officialTime;
-                minutesLate = Math.floor(totalSecondsLateValue / 60);
-                secondsLate = totalSecondsLateValue % 60;
-              }
+            if (e.target) {
+              e.target.value = "";
             }
 
-            const timeIn = dateTime.toLocaleTimeString("en-US");
-            const dateStr = dateTime.toLocaleDateString("en-US");
-            const recordKey = makeRecordKey(name, dateStr, timeIn);
-
-            if (isUndertime) {
-              if (!allExistingUndertimeKeys.has(recordKey)) {
-                allExistingUndertimeKeys.add(recordKey);
-                parsedGeneratedUndertime.push({
-                  id: createId(),
-                  name,
-                  date: dateStr,
-                  timeIn,
-                  sourceFileId: newFileId,
-                  sourceFileName: file.name,
-                });
-              }
-            } else if (isLate) {
-              if (!allExistingLateKeys.has(recordKey)) {
-                allExistingLateKeys.add(recordKey);
-                parsedLateRecords.push({
-                  id: createId(),
-                  name,
-                  date: dateStr,
-                  timeIn,
-                  minutesLate,
-                  secondsLate,
-                  totalSecondsLate: totalSecondsLateValue,
-                  sourceFileId: newFileId,
-                  sourceFileName: file.name,
-                });
-              }
-            }
+            return;
           }
-        });
 
-        const newUploadedFile: UploadedAttendanceFile = {
-          id: newFileId,
-          fileName: file.name,
-          uploadedAt: new Date().toISOString(),
-          lateRecords: parsedLateRecords.sort((a, b) => {
-            const aDate = new Date(`${a.date} ${a.timeIn}`).getTime();
-            const bDate = new Date(`${b.date} ${b.timeIn}`).getTime();
-            return bDate - aDate;
-          }),
-          generatedUndertimes: parsedGeneratedUndertime.sort((a, b) => {
-            const aDate = new Date(`${a.date} ${a.timeIn}`).getTime();
-            const bDate = new Date(`${b.date} ${b.timeIn}`).getTime();
-            return bDate - aDate;
-          }),
-        };
+          await saveUploadedAttendanceFile(
+            workspace,
+            file.name,
+            parsedLateRecords,
+            parsedGeneratedUndertime
+          );
 
-        setUploadedFiles((prev) => [newUploadedFile, ...prev]);
-        setFileName(file.name);
+          const uploadedDay =
+            parsedLateRecords[0]?.date || parsedGeneratedUndertime[0]?.date || null;
 
-        const uploadedDay =
-          parsedLateRecords[0]?.date || parsedGeneratedUndertime[0]?.date || null;
+          await applyDatabaseData(false);
+          setFileName(file.name);
 
-        if (uploadedDay) {
-          setSelectedMonthScope(getMonthKey(uploadedDay));
-          setSelectedDayScope(uploadedDay);
+          if (uploadedDay) {
+            setSelectedMonthScope(getMonthKey(uploadedDay));
+            setSelectedDayScope(uploadedDay);
+          }
+
+          if (e.target) {
+            e.target.value = "";
+          }
+        } catch (error) {
+          console.error("Error reading or saving Excel file:", error);
+          alert(
+            error instanceof Error
+              ? error.message
+              : "Error reading or saving Excel file. Please check the format."
+          );
         }
-
-        if (e.target) {
-          e.target.value = "";
-        }
-      } catch (error) {
-        console.error("Error reading Excel file:", error);
-        alert("Error reading Excel file. Please check the format.");
-      }
+      })();
     };
 
     reader.readAsBinaryString(file);
@@ -726,6 +771,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setSelectedMonthScope(getMonthKey(exemptionDate));
     setSelectedDayScope(exemptionDate);
 
+    if (workspace) {
+      void saveExemptionRecord(workspace, newExemption).catch((error) => {
+        console.error("Failed to save exemption to Supabase:", error);
+        alert("Exemption was added on screen but failed to save to database.");
+      });
+    }
+
     return {
       success: true,
       message: "Exemption saved successfully and matching late record is now excluded.",
@@ -750,6 +802,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setAbsences((prev) => [newAbsence, ...prev]);
     setSelectedMonthScope(getMonthKey(absenceDate));
     setSelectedDayScope(absenceDate);
+
+    if (workspace) {
+      void saveAbsenceRecord(workspace, newAbsence).catch((error) => {
+        console.error("Failed to save absence to Supabase:", error);
+        alert("Absence was added on screen but failed to save to database.");
+      });
+    }
 
     return {
       success: true,
@@ -792,6 +851,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setManualUndertimes((prev) => [newUndertime, ...prev]);
     setSelectedMonthScope(getMonthKey(undertimeDate));
     setSelectedDayScope(undertimeDate);
+
+    if (workspace) {
+      void saveManualUndertimeRecord(workspace, newUndertime).catch((error) => {
+        console.error("Failed to save manual undertime to Supabase:", error);
+        alert("Undertime was added on screen but failed to save to database.");
+      });
+    }
 
     return {
       success: true,
@@ -844,6 +910,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setSelectedMonthScope(getMonthKey(lateRecord.date));
     setSelectedDayScope("all");
 
+    if (workspace) {
+      void saveManualUndertimeRecord(workspace, newUndertime).catch((error) => {
+        console.error("Failed to save converted undertime to Supabase:", error);
+        alert("Converted undertime was added on screen but failed to save to database.");
+      });
+    }
+
     return {
       success: true,
       message: `${lateRecord.name} was successfully moved to Undertime Records.`,
@@ -856,6 +929,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       const updatedFiles = prevFiles.filter((file) => file.id !== fileId);
 
       setFileName(updatedFiles.length > 0 ? updatedFiles[0].fileName : "");
+
+      if (workspace) {
+        void deleteUploadedAttendanceFile(fileId).catch((error) => {
+          console.error("Failed to delete uploaded file from Supabase:", error);
+          alert("File was removed on screen but failed to delete from database.");
+        });
+      }
 
       if (fileToDelete) {
         const deletedDates = new Set<string>();
@@ -891,6 +971,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
           setManualUndertimes((prev) =>
             prev.filter((item) => !datesToRemove.includes(normalizeDate(item.date)))
           );
+
+          if (workspace) {
+            void deleteAttendanceAdjustmentsByDates(workspace, datesToRemove).catch(
+              (error) => {
+                console.error(
+                  "Failed to delete related adjustments from Supabase:",
+                  error
+                );
+              }
+            );
+          }
         }
       }
 
@@ -908,6 +999,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setSelectedMonthScope("all");
     setSelectedDayScope("all");
 
+    if (workspace) {
+      void clearWorkspaceAttendanceData(workspace).catch((error) => {
+        console.error("Failed to clear Supabase attendance data:", error);
+        alert("Records were cleared on screen but failed to clear from database.");
+      });
+    }
+
     if (typeof window !== "undefined" && storageKey) {
       window.localStorage.removeItem(storageKey);
     }
@@ -917,26 +1015,56 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setAbsences((prev) =>
       prev.filter((record) => getMonthKey(record.date) !== monthKey)
     );
+
+    if (workspace) {
+      void deleteAbsencesByMonthFromDatabase(workspace, monthKey).catch((error) => {
+        console.error("Failed to delete absences from Supabase:", error);
+      });
+    }
   };
 
   const deleteExemptionsByMonth = (monthKey: string) => {
     setExemptions((prev) =>
       prev.filter((record) => getMonthKey(record.date) !== monthKey)
     );
+
+    if (workspace) {
+      void deleteExemptionsByMonthFromDatabase(workspace, monthKey).catch(
+        (error) => {
+          console.error("Failed to delete exemptions from Supabase:", error);
+        }
+      );
+    }
   };
 
   const restoreExemption = (id: string) => {
     setExemptions((prev) => prev.filter((record) => record.id !== id));
+
+    void deleteExemptionRecord(id).catch((error) => {
+      console.error("Failed to delete exemption from Supabase:", error);
+    });
   };
 
   const deleteManualUndertimesByMonth = (monthKey: string) => {
     setManualUndertimes((prev) =>
       prev.filter((record) => getMonthKey(record.date) !== monthKey)
     );
+
+    if (workspace) {
+      void deleteManualUndertimesByMonthFromDatabase(workspace, monthKey).catch(
+        (error) => {
+          console.error("Failed to delete manual undertimes from Supabase:", error);
+        }
+      );
+    }
   };
 
   const restoreManualUndertime = (id: string) => {
     setManualUndertimes((prev) => prev.filter((record) => record.id !== id));
+
+    void deleteManualUndertimeRecord(id).catch((error) => {
+      console.error("Failed to delete manual undertime from Supabase:", error);
+    });
   };
 
   const markAllMemoAlertsAsRead = () => {
@@ -944,6 +1072,12 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setReadMemoEmployeeNames((prev) =>
       Array.from(new Set([...prev, ...uniqueNames]))
     );
+
+    if (workspace) {
+      void saveMemoReads(workspace, uniqueNames).catch((error) => {
+        console.error("Failed to save memo reads to Supabase:", error);
+      });
+    }
   };
 
 const exportFilteredWorkbook = async () => {
