@@ -14,3 +14,4 @@ export { FilterBar } from "./FilterBar";
 export { SectionHeader } from "./SectionHeader";
 export { DashboardCard } from "./DashboardCard";
 export { FilterToolbar } from "./FilterToolbar";
+export { DashboardSection } from "./DashboardSection";

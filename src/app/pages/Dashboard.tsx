@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
-import DragDropUpload from "../components/layout/DragDropUpload";
+import DragDropUpload, {
+  type DragDropUploadHandle,
+} from "../components/layout/DragDropUpload";
 import {
   FileSpreadsheet,
   Users,
   Clock,
   Timer,
-  ShieldAlert,
+  UserX,
   BarChart3,
   Bell,
   AlertTriangle,
@@ -14,6 +16,10 @@ import {
   FolderOpen,
   CheckCircle2,
   Download,
+  UploadCloud,
+  Hourglass,
+  CalendarRange,
+  TrendingUp,
 } from "lucide-react";
 import {
   BarChart,
@@ -23,18 +29,23 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Cell,
 } from "recharts";
 import {
   PageHeader,
   StatCard,
-  Card,
   Button,
   Badge,
   EmptyState,
   AlertMessage,
   ConfirmModal,
-  SectionHeader,
+  DataTable,
+  DashboardCard,
+  DashboardSection,
+  FilterToolbar,
+  type Column,
 } from "../components/ui";
+import { MASTER_EMPLOYEE_COUNT } from "../data/masterEmployees";
 
 function formatMonthLabel(monthKey: string) {
   if (monthKey === "all") return "All Months";
@@ -57,6 +68,14 @@ type ConfirmState =
   | { kind: "delete-file"; fileId: string; fileName: string }
   | null;
 
+type UploadedFileRow = {
+  id: string;
+  fileName: string;
+  uploadedAt: string;
+  lates: number;
+  undertime: number;
+};
+
 export function Dashboard() {
   const {
     handleFileUpload,
@@ -66,7 +85,6 @@ export function Dashboard() {
     lateSummary,
     generatedUndertimes,
     absences,
-    exemptions,
     manualUndertimes,
     memoAlerts,
     unreadMemoCount,
@@ -74,6 +92,10 @@ export function Dashboard() {
     clearAllAttendanceHistory,
     selectedMonthScope,
     selectedDayScope,
+    setSelectedMonthScope,
+    setSelectedDayScope,
+    monthScopeOptions,
+    dayScopeOptions,
     exportFilteredWorkbook,
   } = useAttendance();
 
@@ -83,8 +105,20 @@ export function Dashboard() {
   } | null>(null);
 
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
+  const uploadRef = useRef<DragDropUploadHandle | null>(null);
 
-  const topLates = [...lateSummary].slice(0, 5);
+  const topLates = useMemo(() => lateSummary.slice(0, 5), [lateSummary]);
+
+  const totalLateMinutes = useMemo(
+    () =>
+      lateSummary.reduce(
+        (sum, entry) => sum + (entry.totalMinutesLate || 0),
+        0
+      ),
+    [lateSummary]
+  );
+
+  const totalUndertime = generatedUndertimes.length + manualUndertimes.length;
 
   const filterLabel =
     selectedDayScope !== "all"
@@ -92,6 +126,14 @@ export function Dashboard() {
       : selectedMonthScope !== "all"
       ? formatMonthLabel(selectedMonthScope)
       : "All Records";
+
+  const canResetFilters =
+    selectedMonthScope !== "all" || selectedDayScope !== "all";
+
+  const handleResetFilters = () => {
+    setSelectedMonthScope("all");
+    setSelectedDayScope("all");
+  };
 
   const handleExcelExport = async () => {
     const result = await exportFilteredWorkbook();
@@ -137,16 +179,170 @@ export function Dashboard() {
     setConfirmState(null);
   };
 
+  const monthOptions = useMemo(
+    () => [
+      { value: "all", label: "All Months" },
+      ...monthScopeOptions.map((m) => ({
+        value: m,
+        label: formatMonthLabel(m),
+      })),
+    ],
+    [monthScopeOptions]
+  );
+
+  const dayOptions = useMemo(
+    () => [
+      {
+        value: "all",
+        label:
+          selectedMonthScope === "all" ? "All Dates" : "All Dates in Month",
+      },
+      ...dayScopeOptions.map((d) => ({
+        value: d,
+        label: formatDayLabel(d),
+      })),
+    ],
+    [dayScopeOptions, selectedMonthScope]
+  );
+
+  const uploadedRows: UploadedFileRow[] = useMemo(
+    () =>
+      uploadedFiles.map((file) => ({
+        id: file.id,
+        fileName: file.fileName,
+        uploadedAt: new Date(file.uploadedAt).toLocaleString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        lates: file.lateRecords.length,
+        undertime: file.generatedUndertimes.length,
+      })),
+    [uploadedFiles]
+  );
+
+  const uploadedColumns: Column<UploadedFileRow>[] = [
+    {
+      key: "fileName",
+      header: "File Name",
+      render: (row) => (
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-brand-50 text-brand-700 border border-brand-100 flex-shrink-0">
+            <FileSpreadsheet className="w-4 h-4" />
+          </div>
+          <span className="font-medium text-slate-900 truncate">
+            {row.fileName}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: "uploadedAt",
+      header: "Uploaded",
+      render: (row) => (
+        <span className="text-sm text-slate-600">{row.uploadedAt}</span>
+      ),
+    },
+    {
+      key: "lates",
+      header: "Lates",
+      align: "right",
+      render: (row) => (
+        <span className="text-sm font-semibold text-slate-900">
+          {row.lates}
+        </span>
+      ),
+    },
+    {
+      key: "undertime",
+      header: "Undertime",
+      align: "right",
+      render: (row) => (
+        <span className="text-sm font-semibold text-slate-900">
+          {row.undertime}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (row) => (
+        <Button
+          variant="danger"
+          size="sm"
+          leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+          onClick={() =>
+            setConfirmState({
+              kind: "delete-file",
+              fileId: row.id,
+              fileName: row.fileName,
+            })
+          }
+        >
+          Delete
+        </Button>
+      ),
+    },
+  ];
+
+  const scopeChip = (
+    <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-50 text-brand-700 border border-brand-100">
+        <CalendarRange className="w-3.5 h-3.5" />
+      </div>
+      <div className="flex flex-col leading-tight">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+          Current Scope
+        </span>
+        <span className="text-sm font-semibold text-slate-900">
+          {filterLabel}
+        </span>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Dashboard"
-        description="Overview of employee attendance, stored records, uploaded files, and memo alerts."
+        title="HR Attendance Dashboard"
+        description="Monitor daily attendance, late records, absences, undertime, and memo alerts across the organization."
+        endMeta={scopeChip}
         actions={
-          <Badge tone="info" icon={<FileSpreadsheet className="w-3.5 h-3.5" />}>
-            Current scope: {filterLabel}
-          </Badge>
+          <>
+            <Button
+              variant="secondary"
+              leftIcon={<UploadCloud className="w-4 h-4" />}
+              onClick={() => uploadRef.current?.open()}
+            >
+              Upload Attendance
+            </Button>
+            <Button
+              variant="primary"
+              leftIcon={<Download className="w-4 h-4" />}
+              onClick={handleExcelExport}
+            >
+              Export Excel
+            </Button>
+          </>
         }
+      />
+
+      <FilterToolbar
+        monthValue={selectedMonthScope}
+        dayValue={selectedDayScope}
+        monthOptions={monthOptions}
+        dayOptions={dayOptions}
+        scopeLabel={filterLabel}
+        onChangeMonth={(v) => {
+          setSelectedMonthScope(v);
+          setSelectedDayScope("all");
+        }}
+        onChangeDay={(v) => setSelectedDayScope(v)}
+        onReset={handleResetFilters}
+        canReset={canResetFilters}
       />
 
       {feedback && (
@@ -158,315 +354,374 @@ export function Dashboard() {
         />
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Late Records"
-          value={lateRecords.length}
-          icon={Clock}
-          tone="warning"
-        />
-        <StatCard
-          label="Employees Late"
-          value={lateSummary.length}
-          icon={Users}
-          tone="brand"
-        />
-        <StatCard
-          label="Undertime Cases"
-          value={generatedUndertimes.length + manualUndertimes.length}
-          icon={Timer}
-          tone="neutral"
-        />
-        <StatCard
-          label="Total Exceptions"
-          value={absences.length + exemptions.length}
-          icon={ShieldAlert}
-          tone="danger"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <Card className="xl:col-span-2">
-          <SectionHeader
-            icon={<FileSpreadsheet className="w-5 h-5" />}
-            iconTone="brand"
-            title="Upload Attendance Data"
-            description="Import daily biometric Excel files. Each upload is saved and can be deleted separately."
+      <DashboardSection
+        eyebrow="Overview"
+        title="Key Attendance Metrics"
+        description="Headline figures for the current scope."
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="Total Employees"
+            value={MASTER_EMPLOYEE_COUNT}
+            icon={Users}
+            tone="brand"
+            accent
+            hint="Active roster"
           />
-
-          <div className="mt-5">
-            <DragDropUpload
-              onFileSelect={handleDragDropUpload}
-              onInvalidFile={(message) =>
-                setFeedback({ type: "error", message })
-              }
-            />
-          </div>
-
-          {fileName && (
-            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-success-100 bg-success-50 px-3 py-1.5 text-xs font-medium text-success-700">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              {fileName} loaded successfully
-            </div>
-          )}
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={<Download className="w-5 h-5" />}
-            iconTone="brand"
-            title="Reports"
-            description="Export the current report scope to Excel."
+          <StatCard
+            label="Late Records"
+            value={lateRecords.length}
+            icon={Clock}
+            tone="warning"
+            accent
+            hint="In selected scope"
           />
+          <StatCard
+            label="Absences"
+            value={absences.length}
+            icon={UserX}
+            tone="danger"
+            accent
+            hint="In selected scope"
+          />
+          <StatCard
+            label="Memo Alerts"
+            value={memoAlerts.length}
+            icon={Bell}
+            tone="warning"
+            accent
+            hint={
+              unreadMemoCount > 0
+                ? `${unreadMemoCount} unread`
+                : "All reviewed"
+            }
+          />
+        </div>
+      </DashboardSection>
 
-          <Button
-            variant="primary"
-            fullWidth
-            leftIcon={<FileSpreadsheet className="w-4 h-4" />}
-            onClick={handleExcelExport}
-            className="mt-5"
-          >
-            Export Excel Report
-          </Button>
+      <DashboardSection
+        eyebrow="Secondary"
+        title="Supporting Metrics"
+        description="Detailed timing figures and supporting counts."
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <StatCard
+            label="Late Minutes"
+            value={totalLateMinutes}
+            icon={Hourglass}
+            tone="warning"
+            size="sm"
+            hint="Cumulative across records"
+          />
+          <StatCard
+            label="Undertime"
+            value={totalUndertime}
+            icon={Timer}
+            tone="info"
+            size="sm"
+            hint="Generated + manual"
+          />
+          <StatCard
+            label="Files Uploaded"
+            value={uploadedFiles.length}
+            icon={FolderOpen}
+            tone="neutral"
+            size="sm"
+            hint="Attendance imports"
+          />
+        </div>
+      </DashboardSection>
 
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-            <p className="font-semibold text-slate-900">Current export scope</p>
-            <p className="mt-1 text-slate-600">
-              The Excel export follows your selected report scope:{" "}
-              <span className="font-semibold text-slate-900">
-                {filterLabel}
-              </span>
-            </p>
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <Card className="xl:col-span-2 min-h-[360px]">
-          <SectionHeader
-            icon={<BarChart3 className="w-5 h-5" />}
+      <DashboardSection
+        eyebrow="Insights"
+        title="Late Activity Analysis"
+        description="Top late offenders and their cumulative late minutes."
+      >
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          <DashboardCard
+            className="xl:col-span-2"
+            icon={<BarChart3 className="w-4.5 h-4.5" />}
             iconTone="brand"
             title="Top 5 Most Frequent Lates"
-            description="Employees with the highest number of late records in the current scope."
-          />
-
-          <div className="mt-6">
+            description="Employees with the most late records in the selected scope."
+            padded
+            actions={
+              topLates.length > 0 ? (
+                <Badge tone="neutral" icon={<TrendingUp className="w-3 h-3" />}>
+                  {lateSummary.length} tracked
+                </Badge>
+              ) : null
+            }
+          >
             {topLates.length > 0 ? (
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart
-                  data={topLates}
-                  margin={{ top: 8, right: 8, left: 0, bottom: 8 }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="var(--color-border)"
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="name"
-                    tick={{ fontSize: 11, fill: "#64748b" }}
-                    tickLine={false}
-                    axisLine={{ stroke: "var(--color-border)" }}
-                  />
-                  <YAxis
-                    allowDecimals={false}
-                    tick={{ fontSize: 11, fill: "#64748b" }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <Tooltip
-                    cursor={{ fill: "rgba(36,81,224,0.06)" }}
-                    contentStyle={{
-                      borderRadius: 8,
-                      border: "1px solid var(--color-border)",
-                      fontSize: 12,
-                    }}
-                  />
-                  <Bar
-                    dataKey="totalLates"
-                    fill="var(--color-brand-600)"
-                    radius={[6, 6, 0, 0]}
-                    maxBarSize={48}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="-mx-1 h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={topLates}
+                    margin={{ top: 8, right: 12, left: -8, bottom: 0 }}
+                    barCategoryGap="22%"
+                  >
+                    <defs>
+                      <linearGradient id="barFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop
+                          offset="0%"
+                          stopColor="var(--color-brand-500)"
+                          stopOpacity={0.95}
+                        />
+                        <stop
+                          offset="100%"
+                          stopColor="var(--color-brand-700)"
+                          stopOpacity={0.95}
+                        />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="var(--color-border)"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickLine={false}
+                      axisLine={{ stroke: "var(--color-border)" }}
+                      interval={0}
+                      angle={-12}
+                      textAnchor="end"
+                      height={50}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={28}
+                    />
+                    <Tooltip
+                      cursor={{ fill: "rgba(36,81,224,0.06)" }}
+                      contentStyle={{
+                        borderRadius: 8,
+                        border: "1px solid var(--color-border)",
+                        fontSize: 12,
+                        boxShadow: "0 4px 16px rgba(15,23,42,0.08)",
+                      }}
+                      formatter={(value) => [`${value} lates`, "Total"]}
+                    />
+                    <Bar
+                      dataKey="totalLates"
+                      fill="url(#barFill)"
+                      radius={[6, 6, 0, 0]}
+                      maxBarSize={56}
+                    >
+                      {topLates.map((entry) => (
+                        <Cell key={entry.name} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <EmptyState
                 icon={<BarChart3 className="w-6 h-6" />}
                 title="No chart data yet"
                 description="Upload attendance files to populate this chart."
                 bordered={false}
-                className="py-10"
+                className="py-12"
               />
             )}
-          </div>
-        </Card>
+          </DashboardCard>
 
-        <Card>
-          <SectionHeader
-            icon={<Users className="w-5 h-5" />}
+          <DashboardCard
+            icon={<Users className="w-4.5 h-4.5" />}
             iconTone="brand"
             title="Top Employees"
-            description="In the current report scope."
-          />
-
-          <div className="mt-5">
+            description="Most lates in the current report scope."
+          >
             {topLates.length > 0 ? (
-              <ul className="space-y-2">
+              <ol className="space-y-2">
                 {topLates.map((employee, index) => (
                   <li
                     key={employee.name}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 transition-colors"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5 hover:bg-slate-50 hover:border-slate-300 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-brand-50 text-brand-700 flex items-center justify-center font-semibold text-xs">
+                      <div className="w-7 h-7 rounded-full bg-brand-50 text-brand-700 border border-brand-100 flex items-center justify-center font-semibold text-xs flex-shrink-0">
                         {index + 1}
                       </div>
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-slate-900 truncate">
                           {employee.name}
                         </p>
-                        <p className="text-xs text-slate-500">
-                          {employee.totalMinutesLate} total late minutes
+                        <p className="text-[11px] text-slate-500">
+                          {employee.totalMinutesLate} late minutes
                         </p>
                       </div>
                     </div>
-
-                    <div className="text-right">
-                      <p className="text-base font-semibold text-slate-900">
-                        {employee.totalLates}
-                      </p>
-                      <p className="text-[11px] text-slate-500 uppercase tracking-wide">
-                        lates
-                      </p>
-                    </div>
+                    <Badge tone="warning">{employee.totalLates}×</Badge>
                   </li>
                 ))}
-              </ul>
+              </ol>
             ) : (
               <EmptyState
-                title="No summary available"
+                title="No summary yet"
                 description="Upload attendance files to populate this list."
                 bordered
               />
             )}
-          </div>
-        </Card>
-      </div>
+          </DashboardCard>
+        </div>
+      </DashboardSection>
 
-      <Card>
-        <SectionHeader
-          icon={<FolderOpen className="w-5 h-5" />}
+      <DashboardSection
+        eyebrow="Data Management"
+        title="Imports & Reports"
+        description="Upload daily attendance files and export the current scope."
+      >
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          <DashboardCard
+            className="xl:col-span-2"
+            icon={<UploadCloud className="w-4.5 h-4.5" />}
+            iconTone="brand"
+            title="Upload Attendance"
+            description="Import daily biometric Excel files. Each upload is stored separately."
+          >
+            <DragDropUpload
+              ref={uploadRef}
+              density="compact"
+              onFileSelect={handleDragDropUpload}
+              onInvalidFile={(message) =>
+                setFeedback({ type: "error", message })
+              }
+            />
+
+            {fileName && (
+              <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-success-100 bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                {fileName} loaded
+              </div>
+            )}
+          </DashboardCard>
+
+          <DashboardCard
+            icon={<Download className="w-4.5 h-4.5" />}
+            iconTone="brand"
+            title="Export Report"
+            description="Generate an Excel report for the current scope."
+          >
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                Current scope
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900 truncate">
+                {filterLabel}
+              </p>
+            </div>
+
+            <Button
+              variant="primary"
+              fullWidth
+              leftIcon={<FileSpreadsheet className="w-4 h-4" />}
+              onClick={handleExcelExport}
+              className="mt-3"
+            >
+              Export Excel Report
+            </Button>
+          </DashboardCard>
+        </div>
+      </DashboardSection>
+
+      <DashboardSection
+        eyebrow="History"
+        title="Uploaded Attendance Files"
+        description="Manage individual imports or clear the full history."
+      >
+        <DashboardCard
+          icon={<FolderOpen className="w-4.5 h-4.5" />}
           iconTone="neutral"
-          title="Uploaded Attendance Files"
-          description="Delete one file or clear all attendance history."
+          title="File History"
+          description="All attendance files imported into the system."
+          padded={false}
           actions={
             uploadedFiles.length > 0 && (
               <Button
                 variant="danger"
                 size="sm"
-                leftIcon={<Trash2 className="w-4 h-4" />}
+                leftIcon={<Trash2 className="w-3.5 h-3.5" />}
                 onClick={() => setConfirmState({ kind: "clear-all" })}
               >
                 Clear All History
               </Button>
             )
           }
-        />
-
-        <div className="mt-5 space-y-2">
-          {uploadedFiles.length === 0 ? (
-            <EmptyState
-              icon={<FolderOpen className="w-6 h-6" />}
-              title="No uploaded attendance files yet"
-              description="Drop an Excel file above to get started."
-              bordered
-            />
+        >
+          {uploadedRows.length === 0 ? (
+            <div className="px-5 pb-5">
+              <EmptyState
+                icon={<FolderOpen className="w-6 h-6" />}
+                title="No uploaded attendance files yet"
+                description="Drop an Excel file in the Upload Attendance card above to get started."
+                bordered
+              />
+            </div>
           ) : (
-            uploadedFiles.map((file) => (
-              <div
-                key={file.id}
-                className="rounded-lg border border-slate-200 bg-white p-4 flex items-center justify-between gap-4 flex-col sm:flex-row hover:border-slate-300 transition-colors"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900 truncate">
-                    {file.fileName}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Uploaded{" "}
-                    {new Date(file.uploadedAt).toLocaleString("en-US")}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {file.lateRecords.length} late record(s) •{" "}
-                    {file.generatedUndertimes.length} undertime record(s)
-                  </p>
-                </div>
-
-                <Button
-                  variant="danger"
-                  size="sm"
-                  leftIcon={<Trash2 className="w-4 h-4" />}
-                  onClick={() =>
-                    setConfirmState({
-                      kind: "delete-file",
-                      fileId: file.id,
-                      fileName: file.fileName,
-                    })
-                  }
-                >
-                  Delete
-                </Button>
-              </div>
-            ))
+            <DataTable
+              columns={uploadedColumns}
+              rows={uploadedRows}
+              rowKey={(row) => row.id}
+              dense
+            />
           )}
-        </div>
-      </Card>
+        </DashboardCard>
+      </DashboardSection>
 
       {memoAlerts.length > 0 && (
-        <Card className="border-warning-100 bg-warning-50/40">
-          <SectionHeader
-            icon={<Bell className="w-5 h-5" />}
+        <DashboardSection
+          eyebrow="Action Required"
+          title="Memo Reminders"
+          description="Employees with 4 or more lates that need a memo review."
+        >
+          <DashboardCard
+            icon={<Bell className="w-4.5 h-4.5" />}
             iconTone="warning"
-            title="Penalty Reminder"
-            description="Employees with 4+ lates are visible in the notification bell."
+            title={`${memoAlerts.length} pending memo${
+              memoAlerts.length === 1 ? "" : "s"
+            }`}
+            description="Review each employee and issue the appropriate memo."
             actions={
               <Badge tone="warning">
-                {unreadMemoCount} unread alert(s)
+                {unreadMemoCount} unread
               </Badge>
             }
-          />
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-5">
-            {memoAlerts.map((alert) => (
-              <div
-                key={alert.id}
-                className="bg-white rounded-lg border border-warning-100 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-full bg-warning-50 text-warning-700 flex items-center justify-center flex-shrink-0">
-                      <AlertTriangle className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
+            padded={false}
+          >
+            <ul className="divide-y divide-slate-100">
+              {memoAlerts.map((alert) => (
+                <li
+                  key={alert.id}
+                  className="flex items-start gap-3 px-5 py-3.5 hover:bg-slate-50/60 transition-colors"
+                >
+                  <div className="mt-0.5 w-8 h-8 rounded-full bg-warning-50 text-warning-700 border border-warning-100 flex items-center justify-center flex-shrink-0">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-semibold text-slate-900 truncate">
                         {alert.name}
                       </p>
-                      <p className="text-xs text-slate-500">
-                        {alert.totalMinutesLate} total late minutes
-                      </p>
+                      <Badge tone="danger">{alert.totalLates} lates</Badge>
                     </div>
+                    <p className="text-xs text-slate-600 mt-1 leading-5">
+                      {alert.message}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Total late minutes: {alert.totalMinutesLate}
+                    </p>
                   </div>
-
-                  <Badge tone="danger">{alert.totalLates} lates</Badge>
-                </div>
-
-                <p className="text-sm text-slate-600 mt-3 leading-5">
-                  {alert.message}
-                </p>
-              </div>
-            ))}
-          </div>
-        </Card>
+                </li>
+              ))}
+            </ul>
+          </DashboardCard>
+        </DashboardSection>
       )}
 
       <ConfirmModal

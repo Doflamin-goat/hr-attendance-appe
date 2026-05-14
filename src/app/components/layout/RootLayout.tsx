@@ -5,7 +5,6 @@ import {
   ShieldCheck,
   UserX,
   Timer,
-  UploadCloud,
   Bell,
   Users,
   AlertTriangle,
@@ -14,6 +13,7 @@ import {
   LogOut,
   Menu,
   X,
+  ChevronRight,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
 import { useAttendance } from "../../context/AttendanceContext";
@@ -46,39 +46,41 @@ function formatDayLabel(dayValue: string) {
 
 type SidebarContentProps = {
   pathname: string;
-  fileName: string;
-  scopeLabel: string;
-  memoCount: number;
+  workspace: string | null;
+  email: string | null;
+  onSignOut: () => void;
   onNavigate?: () => void;
 };
 
 function SidebarContent({
   pathname,
-  fileName,
-  scopeLabel,
-  memoCount,
+  workspace,
+  email,
+  onSignOut,
   onNavigate,
 }: SidebarContentProps) {
   return (
     <>
-      <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-200">
-        <div className="w-9 h-9 rounded-lg bg-brand-700 flex items-center justify-center">
+      <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-200">
+        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-600 to-brand-800 flex items-center justify-center shadow-sm">
           <Clock className="w-4 h-4 text-white" />
         </div>
         <div className="min-w-0">
-          <p className="text-base font-bold text-slate-900 leading-tight">
+          <p className="text-[15px] font-bold text-slate-900 leading-tight">
             TimeCore
           </p>
-          <p className="text-xs text-slate-500">HR Attendance</p>
+          <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">
+            HR Attendance
+          </p>
         </div>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        <p className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
           Menu
         </p>
 
-        <ul className="space-y-1">
+        <ul className="space-y-0.5">
           {navigation.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
@@ -88,18 +90,23 @@ function SidebarContent({
                 <Link
                   to={item.href}
                   onClick={onNavigate}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                  className={`group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                     isActive
                       ? "bg-brand-50 text-brand-700"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                   }`}
                 >
+                  {isActive && (
+                    <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-brand-600" />
+                  )}
                   <Icon
                     className={`w-4 h-4 ${
-                      isActive ? "text-brand-700" : "text-slate-400"
+                      isActive
+                        ? "text-brand-700"
+                        : "text-slate-400 group-hover:text-slate-600"
                     }`}
                   />
-                  {item.name}
+                  <span className="truncate">{item.name}</span>
                 </Link>
               </li>
             );
@@ -107,47 +114,28 @@ function SidebarContent({
         </ul>
       </nav>
 
-      <div className="border-t border-slate-200 p-4 space-y-3">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="flex items-start gap-2.5">
-            <UploadCloud className="w-4 h-4 text-brand-700 mt-0.5 flex-shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Current File
-              </p>
-              <p className="text-xs text-slate-700 truncate mt-0.5">
-                {fileName || "None selected"}
-              </p>
-            </div>
+      <div className="border-t border-slate-200 p-3">
+        <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+          <div className="w-8 h-8 rounded-full bg-brand-50 text-brand-700 border border-brand-100 flex items-center justify-center text-xs font-bold flex-shrink-0">
+            HR
           </div>
-        </div>
-
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="flex items-start gap-2.5">
-            <CalendarRange className="w-4 h-4 text-brand-700 mt-0.5 flex-shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Report Scope
-              </p>
-              <p className="text-xs text-slate-700 mt-0.5">{scopeLabel}</p>
-            </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-slate-900 truncate">
+              {workspace ?? "No workspace"}
+            </p>
+            <p className="text-[11px] text-slate-500 truncate">
+              {email ?? "No email"}
+            </p>
           </div>
-        </div>
-
-        <div className="rounded-lg border border-warning-100 bg-warning-50 p-3">
-          <div className="flex items-start gap-2.5">
-            <Bell className="w-4 h-4 text-warning-700 mt-0.5 flex-shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-warning-700">
-                Memo Reminders
-              </p>
-              <p className="text-xs text-warning-700 mt-0.5">
-                {memoCount > 0
-                  ? `${memoCount} employee(s) due`
-                  : "No reminders"}
-              </p>
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="text-slate-400 hover:text-danger-700 transition-colors"
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </>
@@ -157,16 +145,11 @@ function SidebarContent({
 export function RootLayout() {
   const location = useLocation();
   const {
-    fileName,
     memoAlerts,
     unreadMemoCount,
     markAllMemoAlertsAsRead,
-    monthScopeOptions,
-    dayScopeOptions,
     selectedMonthScope,
     selectedDayScope,
-    setSelectedMonthScope,
-    setSelectedDayScope,
   } = useAttendance();
 
   const { workspace, email, signOut } = useAuth();
@@ -179,14 +162,18 @@ export function RootLayout() {
     return "All Records";
   }, [selectedMonthScope, selectedDayScope]);
 
+  const handleSignOut = () => {
+    void signOut();
+  };
+
   return (
-    <div className="min-h-screen bg-slate-100 flex">
+    <div className="min-h-screen bg-slate-50 flex">
       <aside className="hidden md:flex w-64 flex-col bg-white border-r border-slate-200 fixed inset-y-0 z-10">
         <SidebarContent
           pathname={location.pathname}
-          fileName={fileName}
-          scopeLabel={currentScopeLabel}
-          memoCount={memoAlerts.length}
+          workspace={workspace}
+          email={email}
+          onSignOut={handleSignOut}
         />
       </aside>
 
@@ -201,16 +188,19 @@ export function RootLayout() {
             <button
               type="button"
               onClick={() => setIsMobileNavOpen(false)}
-              className="absolute top-4 right-4 text-slate-500 hover:text-slate-700"
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-700"
               aria-label="Close menu"
             >
               <X className="w-5 h-5" />
             </button>
             <SidebarContent
               pathname={location.pathname}
-              fileName={fileName}
-              scopeLabel={currentScopeLabel}
-              memoCount={memoAlerts.length}
+              workspace={workspace}
+              email={email}
+              onSignOut={() => {
+                setIsMobileNavOpen(false);
+                handleSignOut();
+              }}
               onNavigate={() => setIsMobileNavOpen(false)}
             />
           </aside>
@@ -218,60 +208,29 @@ export function RootLayout() {
       )}
 
       <div className="flex-1 md:ml-64 flex flex-col min-w-0">
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 lg:px-6">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
+        <header className="bg-white/95 backdrop-blur border-b border-slate-200 sticky top-0 z-20">
+          <div className="flex items-center justify-between gap-3 px-4 sm:px-6 h-14">
+            <div className="flex items-center gap-3 min-w-0">
               <button
                 type="button"
                 onClick={() => setIsMobileNavOpen(true)}
-                className="md:hidden inline-flex items-center justify-center rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
+                className="md:hidden inline-flex items-center justify-center rounded-lg border border-slate-200 p-1.5 text-slate-600 hover:bg-slate-50"
                 aria-label="Open menu"
               >
                 <Menu className="w-5 h-5" />
               </button>
 
-              <div className="hidden lg:flex items-center gap-2 text-slate-500 text-sm font-medium">
+              <div className="hidden md:flex items-center gap-2 text-slate-500">
                 <CalendarRange className="w-4 h-4" />
-                Scope
-              </div>
-
-              <div className="flex flex-1 items-center gap-2 min-w-0 max-w-2xl">
-                <select
-                  value={selectedMonthScope}
-                  onChange={(e) => {
-                    setSelectedMonthScope(e.target.value);
-                    setSelectedDayScope("all");
-                  }}
-                  className="h-9 flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                >
-                  <option value="all">All Months</option>
-                  {monthScopeOptions.map((month) => (
-                    <option key={month} value={month}>
-                      {formatMonthLabel(month)}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  value={selectedDayScope}
-                  onChange={(e) => setSelectedDayScope(e.target.value)}
-                  className="h-9 flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                >
-                  <option value="all">
-                    {selectedMonthScope === "all"
-                      ? "All Dates"
-                      : "All Dates in Month"}
-                  </option>
-                  {dayScopeOptions.map((day) => (
-                    <option key={day} value={day}>
-                      {formatDayLabel(day)}
-                    </option>
-                  ))}
-                </select>
+                <span className="text-sm font-medium">Scope</span>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
+                <span className="text-sm font-semibold text-slate-900">
+                  {currentScopeLabel}
+                </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <div className="relative">
                 <button
                   type="button"
@@ -371,30 +330,6 @@ export function RootLayout() {
                     </div>
                   </>
                 )}
-              </div>
-
-              <div className="hidden sm:flex items-center gap-3 px-3 py-1.5 rounded-lg border border-slate-200 bg-white">
-                <div className="text-right leading-tight">
-                  <p className="text-xs font-semibold text-slate-900">
-                    {workspace ?? "No Workspace"}
-                  </p>
-                  <p className="text-[11px] text-slate-500 truncate max-w-[160px]">
-                    {email ?? "No email"}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void signOut()}
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-danger-700"
-                  title="Sign out"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span className="hidden lg:inline">Logout</span>
-                </button>
-              </div>
-
-              <div className="w-9 h-9 rounded-full bg-brand-50 border border-brand-100 flex items-center justify-center text-brand-700 text-sm font-bold flex-shrink-0">
-                HR
               </div>
             </div>
           </div>
