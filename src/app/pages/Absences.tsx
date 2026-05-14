@@ -1,17 +1,25 @@
 import { useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
+import { UserX, Plus, CalendarDays, Trash2 } from "lucide-react";
 import {
-  UserX,
-  Plus,
-  AlertCircle,
-  CheckCircle2,
-  CalendarDays,
-  Trash2,
-} from "lucide-react";
+  PageHeader,
+  Card,
+  Button,
+  Input,
+  Select,
+  Textarea,
+  Badge,
+  EmptyState,
+  AlertMessage,
+  ConfirmModal,
+  SectionHeader,
+} from "../components/ui";
 
 function getSafeDate(dateValue: string) {
   const parsed = new Date(dateValue);
-  return Number.isNaN(parsed.getTime()) ? new Date(`${dateValue}T00:00:00`) : parsed;
+  return Number.isNaN(parsed.getTime())
+    ? new Date(`${dateValue}T00:00:00`)
+    : parsed;
 }
 
 function getMonthKey(dateValue: string) {
@@ -22,29 +30,23 @@ function getMonthKey(dateValue: string) {
 function formatMonthLabel(monthKey: string) {
   const [year, month] = monthKey.split("-");
   const date = new Date(Number(year), Number(month) - 1, 1);
-
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
 export function Absences() {
   const { absences, addAbsence, deleteAbsencesByMonth } = useAttendance();
 
-  const [formData, setFormData] = useState({
-    name: "",
-    reason: "",
-    date: "",
-  });
-
+  const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const monthOptions = useMemo(() => {
-    const uniqueMonths = Array.from(new Set(absences.map((record) => getMonthKey(record.date))));
+    const uniqueMonths = Array.from(
+      new Set(absences.map((record) => getMonthKey(record.date)))
+    );
     return uniqueMonths.sort((a, b) => b.localeCompare(a));
   }, [absences]);
 
@@ -79,207 +81,200 @@ export function Absences() {
       date: formData.date,
     });
 
-    if (!result.success) {
-      setFeedback({
-        type: "error",
-        message: result.message,
-      });
-      return;
-    }
-
     setFeedback({
-      type: "success",
+      type: result.success ? "success" : "error",
       message: result.message,
     });
 
-    setSelectedMonth(getMonthKey(formData.date));
+    if (result.success) {
+      setSelectedMonth(getMonthKey(formData.date));
+      setFormData({ name: "", reason: "", date: "" });
+    }
+  };
 
-    setFormData({
-      name: "",
-      reason: "",
-      date: "",
+  const handleDeleteMonth = () => {
+    deleteAbsencesByMonth(selectedMonth);
+    setFeedback({
+      type: "success",
+      message: `All absence records for ${formatMonthLabel(selectedMonth)} were removed.`,
     });
+    setSelectedMonth("all");
+    setConfirmDelete(false);
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900">Absence Records</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Manage manual absence entries by month
-        </p>
-      </div>
+      <PageHeader
+        title="Absence Records"
+        description="Manage manual absence entries by month."
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sticky top-24">
-            <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
-              <div className="p-2 bg-red-100 text-red-600 rounded-lg">
-                <UserX className="w-5 h-5" />
-              </div>
-              <h2 className="text-lg font-bold text-slate-900">Add Absence</h2>
-            </div>
+          <Card className="lg:sticky lg:top-24">
+            <SectionHeader
+              icon={<UserX className="w-5 h-5" />}
+              iconTone="danger"
+              title="Add Absence"
+              description="Log an approved or noted absence."
+            />
 
             {feedback && (
-              <div
-                className={`mb-4 rounded-lg border px-3 py-3 text-sm flex items-start gap-2 ${
-                  feedback.type === "success"
-                    ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                    : "bg-red-50 border-red-200 text-red-700"
-                }`}
-              >
-                {feedback.type === "success" ? (
-                  <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                )}
-                <span>{feedback.message}</span>
+              <div className="mt-4">
+                <AlertMessage
+                  tone={feedback.type}
+                  message={feedback.message}
+                  onDismiss={() => setFeedback(null)}
+                />
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Employee Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Dela Cruz, Juan"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500"
-                />
-              </div>
+            <form onSubmit={handleSubmit} className="space-y-4 mt-5">
+              <Input
+                label="Employee Name"
+                required
+                placeholder="e.g. Dela Cruz, Juan"
+                value={formData.name}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
+              />
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Date
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={formData.date}
-                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500"
-                />
-              </div>
+              <Input
+                label="Date"
+                type="date"
+                required
+                value={formData.date}
+                onChange={(e) =>
+                  setFormData({ ...formData, date: e.target.value })
+                }
+              />
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Reason
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  placeholder="Official reason for absence..."
-                  value={formData.reason}
-                  onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500 resize-none"
-                />
-              </div>
+              <Textarea
+                label="Reason"
+                required
+                rows={3}
+                placeholder="Official reason for absence..."
+                value={formData.reason}
+                onChange={(e) =>
+                  setFormData({ ...formData, reason: e.target.value })
+                }
+              />
 
-              <button
+              <Button
                 type="submit"
-                className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg shadow-sm flex items-center justify-center gap-2"
+                variant="primary"
+                fullWidth
+                leftIcon={<Plus className="w-4 h-4" />}
               >
-                <Plus className="w-4 h-4" /> Save Absence
-              </button>
+                Save Absence
+              </Button>
             </form>
-          </div>
+          </Card>
         </div>
 
         <div className="lg:col-span-2 space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-100 rounded-lg text-slate-600">
-                  <CalendarDays className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Month Filter</p>
-                  <p className="text-xs text-slate-500">
-                    View and manage absence records by month
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-2">
-                <select
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(e.target.value)}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-red-500"
-                >
-                  <option value="all">All Months</option>
-                  {monthOptions.map((month) => (
-                    <option key={month} value={month}>
-                      {formatMonthLabel(month)}
-                    </option>
-                  ))}
-                </select>
-
-                {selectedMonth !== "all" && (
-                  <button
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete all absence records for ${formatMonthLabel(selectedMonth)}?`
-                        )
-                      ) {
-                        deleteAbsencesByMonth(selectedMonth);
-                        setSelectedMonth("all");
-                      }
-                    }}
-                    className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 text-sm font-medium"
+          <Card>
+            <SectionHeader
+              icon={<CalendarDays className="w-5 h-5" />}
+              iconTone="neutral"
+              title="Month Filter"
+              description="View and manage absence records by month."
+              actions={
+                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                  <Select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="sm:w-52"
                   >
-                    <Trash2 className="w-4 h-4" />
-                    Delete This Month
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+                    <option value="all">All Months</option>
+                    {monthOptions.map((month) => (
+                      <option key={month} value={month}>
+                        {formatMonthLabel(month)}
+                      </option>
+                    ))}
+                  </Select>
 
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-red-100 text-red-600 rounded-lg">
-                <UserX className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Saved Absence Records</h2>
-                <p className="text-sm text-slate-500">
-                  {selectedMonth === "all"
-                    ? "Showing all saved absences"
-                    : `Showing records for ${formatMonthLabel(selectedMonth)}`}
-                </p>
-              </div>
-            </div>
+                  {selectedMonth !== "all" && (
+                    <Button
+                      variant="danger"
+                      leftIcon={<Trash2 className="w-4 h-4" />}
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      Delete Month
+                    </Button>
+                  )}
+                </div>
+              }
+            />
+          </Card>
 
-            {filteredAbsences.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
-                <p className="text-sm text-slate-500">No absence records found.</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredAbsences.map((record) => (
-                  <div
-                    key={record.id}
-                    className="rounded-xl border border-slate-200 bg-slate-50 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">{record.name}</p>
-                        <p className="text-xs text-slate-500 mt-1">{record.date}</p>
-                        <p className="text-sm text-slate-700 mt-2">{record.reason}</p>
+          <Card>
+            <SectionHeader
+              icon={<UserX className="w-5 h-5" />}
+              iconTone="danger"
+              title="Saved Absence Records"
+              description={
+                selectedMonth === "all"
+                  ? `Showing all ${filteredAbsences.length} record(s).`
+                  : `Showing ${filteredAbsences.length} record(s) for ${formatMonthLabel(
+                      selectedMonth
+                    )}.`
+              }
+            />
+
+            <div className="mt-5">
+              {filteredAbsences.length === 0 ? (
+                <EmptyState
+                  icon={<UserX className="w-6 h-6" />}
+                  title="No absence records"
+                  description="Use the form to add a noted absence."
+                  bordered
+                />
+              ) : (
+                <ul className="space-y-2">
+                  {filteredAbsences.map((record) => (
+                    <li
+                      key={record.id}
+                      className="rounded-lg border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-900 truncate">
+                            {record.name}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {getSafeDate(record.date).toLocaleDateString(
+                              "en-US"
+                            )}
+                          </p>
+                        </div>
+                        <Badge tone="danger">Absent</Badge>
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                      <p className="text-sm text-slate-700 mt-3 leading-5">
+                        <span className="font-medium text-slate-900">
+                          Reason:
+                        </span>{" "}
+                        {record.reason}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Card>
         </div>
       </div>
+
+      <ConfirmModal
+        open={confirmDelete}
+        tone="danger"
+        title={`Delete absences for ${formatMonthLabel(selectedMonth)}?`}
+        description="All absence records for this month will be permanently removed."
+        confirmLabel="Delete Month"
+        onConfirm={handleDeleteMonth}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

@@ -5,11 +5,21 @@ import {
   Plus,
   CalendarDays,
   Timer,
-  AlertCircle,
-  CheckCircle2,
   RotateCcw,
   Trash2,
 } from "lucide-react";
+import {
+  PageHeader,
+  Card,
+  Button,
+  Input,
+  Select,
+  Textarea,
+  EmptyState,
+  AlertMessage,
+  ConfirmModal,
+  SectionHeader,
+} from "../components/ui";
 
 function getMonthKey(dateValue: string) {
   const date = new Date(dateValue);
@@ -21,12 +31,10 @@ function getMonthKey(dateValue: string) {
 function formatMonthLabel(monthKey: string) {
   const [year, month] = monthKey.split("-");
   const date = new Date(Number(year), Number(month) - 1, 1);
-
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
+
+type RestoreTarget = { id: string; name: string; date: string } | null;
 
 export function Undertime() {
   const {
@@ -49,14 +57,14 @@ export function Undertime() {
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
 
   const monthOptions = useMemo(() => {
     const months = new Set<string>();
-
     manualUndertimes.forEach((record) => {
       months.add(getMonthKey(record.date));
     });
-
     return Array.from(months).sort((a, b) => b.localeCompare(a));
   }, [manualUndertimes]);
 
@@ -64,7 +72,9 @@ export function Undertime() {
     const filtered =
       selectedMonth === "all"
         ? manualUndertimes
-        : manualUndertimes.filter((record) => getMonthKey(record.date) === selectedMonth);
+        : manualUndertimes.filter(
+            (record) => getMonthKey(record.date) === selectedMonth
+          );
 
     return [...filtered].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
@@ -72,7 +82,13 @@ export function Undertime() {
   }, [manualUndertimes, selectedMonth]);
 
   const handleSave = () => {
-    if (!employeeName.trim() || !date || !fromTime.trim() || !toTime.trim() || !reason.trim()) {
+    if (
+      !employeeName.trim() ||
+      !date ||
+      !fromTime.trim() ||
+      !toTime.trim() ||
+      !reason.trim()
+    ) {
       setFeedback({
         type: "error",
         message: "Please complete all manual undertime fields.",
@@ -105,298 +121,296 @@ export function Undertime() {
     }
   };
 
-  const handleRestore = (id: string, name: string, dateValue: string) => {
-    if (
-      window.confirm(
-        `Restore ${name} on ${new Date(dateValue).toLocaleDateString("en-US")} back to Late Records?`
-      )
-    ) {
-      restoreManualUndertime(id);
-      setFeedback({
-        type: "success",
-        message: `${name} has been restored to Late Records.`,
-      });
-    }
+  const handleDeleteMonth = () => {
+    deleteManualUndertimesByMonth(selectedMonth);
+    setFeedback({
+      type: "success",
+      message: `All manual undertime records for ${formatMonthLabel(selectedMonth)} were removed and restored to Late Records.`,
+    });
+    setSelectedMonth("all");
+    setConfirmDeleteMonth(false);
+  };
+
+  const handleRestoreConfirm = () => {
+    if (!restoreTarget) return;
+    restoreManualUndertime(restoreTarget.id);
+    setFeedback({
+      type: "success",
+      message: `${restoreTarget.name} has been restored to Late Records.`,
+    });
+    setRestoreTarget(null);
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-col lg:flex-row">
-        <div>
-          <h1 className="text-4xl font-bold text-slate-900">Undertime Records</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            View system-detected undertime and add manual undertime adjustments.
-          </p>
-        </div>
-
-        <div className="inline-flex rounded-2xl bg-white border border-slate-200 p-1 shadow-sm">
-          <button
-            onClick={() => setActiveTab("system")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium ${
-              activeTab === "system"
-                ? "bg-slate-900 text-white"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            System Generated
-          </button>
-          <button
-            onClick={() => setActiveTab("manual")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium ${
-              activeTab === "manual"
-                ? "bg-slate-900 text-white"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            Manual Entry
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Undertime Records"
+        description="View system-detected undertime and add manual undertime adjustments."
+        actions={
+          <div className="inline-flex rounded-lg bg-slate-100 p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab("system")}
+              className={`px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === "system"
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              System Generated
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("manual")}
+              className={`px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === "manual"
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              Manual Entry
+            </button>
+          </div>
+        }
+      />
 
       {feedback && (
-        <div
-          className={`rounded-2xl border px-4 py-4 flex items-start gap-3 ${
-            feedback.type === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-red-200 bg-red-50 text-red-800"
-          }`}
-        >
-          {feedback.type === "success" ? (
-            <CheckCircle2 className="w-5 h-5 mt-0.5 flex-shrink-0" />
-          ) : (
-            <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
-          )}
-          <div>
-            <p className="text-sm font-semibold">System Message</p>
-            <p className="text-sm mt-1">{feedback.message}</p>
-          </div>
-        </div>
+        <AlertMessage
+          tone={feedback.type}
+          title="System message"
+          message={feedback.message}
+          onDismiss={() => setFeedback(null)}
+        />
       )}
 
       {activeTab === "system" ? (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-          <h3 className="text-lg font-bold text-slate-900 mb-4">System Generated Undertime</h3>
+        <Card>
+          <SectionHeader
+            icon={<Timer className="w-5 h-5" />}
+            iconTone="brand"
+            title="System Generated Undertime"
+            description="Auto-detected from uploaded attendance files."
+          />
 
-          {generatedUndertimes.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-              No system-generated undertime records yet.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {generatedUndertimes.map((record) => (
-                <div
-                  key={record.id}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                >
-                  <p className="text-sm font-semibold text-slate-900">{record.name}</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {record.date} • {record.timeIn}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Source file: {record.sourceFileName}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+          <div className="mt-5">
+            {generatedUndertimes.length === 0 ? (
+              <EmptyState
+                icon={<Timer className="w-6 h-6" />}
+                title="No system-generated undertime"
+                description="Records will appear automatically when attendance files indicate undertime."
+                bordered
+              />
+            ) : (
+              <ul className="space-y-2">
+                {generatedUndertimes.map((record) => (
+                  <li
+                    key={record.id}
+                    className="rounded-lg border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors"
+                  >
+                    <p className="text-sm font-semibold text-slate-900">
+                      {record.name}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {record.date} • {record.timeIn}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Source: {record.sourceFileName}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-6">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
-                <Clock3 className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Add Undertime</h3>
-                <p className="text-sm text-slate-500">
-                </p>
-              </div>
-            </div>
+          <Card>
+            <SectionHeader
+              icon={<Clock3 className="w-5 h-5" />}
+              iconTone="brand"
+              title="Add Undertime"
+              description="Record an approved manual adjustment."
+            />
 
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-slate-700 block mb-2">
-                  Employee Name
-                </label>
-                <input
-                  value={employeeName}
-                  onChange={(e) => setEmployeeName(e.target.value)}
-                  placeholder="e.g. Dela Cruz, Juan"
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
+            <div className="space-y-4 mt-5">
+              <Input
+                label="Employee Name"
+                value={employeeName}
+                onChange={(e) => setEmployeeName(e.target.value)}
+                placeholder="e.g. Dela Cruz, Juan"
+              />
+
+              <Input
+                label="Date"
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
 
               <div>
-                <label className="text-sm font-medium text-slate-700 block mb-2">
-                  Date
-                </label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700 block mb-2">
+                <p className="text-sm font-medium text-slate-700 mb-1.5">
                   Undertime Hours
-                </label>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <input
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
                     value={fromTime}
                     onChange={(e) => setFromTime(e.target.value)}
                     placeholder="From"
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <input
+                  <Input
                     value={toTime}
                     onChange={(e) => setToTime(e.target.value)}
                     placeholder="To"
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="text-sm font-medium text-slate-700 block mb-2">
-                  Period
-                </label>
-                <select
-                  value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="AM">AM</option>
-                  <option value="PM">PM</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700 block mb-2">
-                  Reason
-                </label>
-                <textarea
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="Official reason for undertime..."
-                  rows={4}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-                />
-              </div>
-
-              <button
-                onClick={handleSave}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
+              <Select
+                label="Period"
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
               >
-                <Plus className="w-4 h-4" />
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </Select>
+
+              <Textarea
+                label="Reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Official reason for undertime..."
+                rows={4}
+              />
+
+              <Button
+                variant="primary"
+                fullWidth
+                leftIcon={<Plus className="w-4 h-4" />}
+                onClick={handleSave}
+              >
                 Save Entry
-              </button>
+              </Button>
             </div>
-          </div>
+          </Card>
 
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-            <div className="flex items-center justify-between gap-4 flex-col sm:flex-row mb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center">
-                  <CalendarDays className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">Manual Undertime Records</h3>
-                  <p className="text-sm text-slate-500">
-                    View and manage manual undertime by month.
-                  </p>
-                </div>
-              </div>
+          <Card>
+            <SectionHeader
+              icon={<CalendarDays className="w-5 h-5" />}
+              iconTone="neutral"
+              title="Manual Undertime Records"
+              description="View and manage manual undertime by month."
+              actions={
+                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                  <Select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="sm:w-52"
+                  >
+                    <option value="all">All Months</option>
+                    {monthOptions.map((month) => (
+                      <option key={month} value={month}>
+                        {formatMonthLabel(month)}
+                      </option>
+                    ))}
+                  </Select>
 
-              <div className="flex flex-col sm:flex-row gap-2">
-                <select
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(e.target.value)}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="all">All Months</option>
-                  {monthOptions.map((month) => (
-                    <option key={month} value={month}>
-                      {formatMonthLabel(month)}
-                    </option>
+                  {selectedMonth !== "all" && (
+                    <Button
+                      variant="danger"
+                      leftIcon={<Trash2 className="w-4 h-4" />}
+                      onClick={() => setConfirmDeleteMonth(true)}
+                    >
+                      Delete Month
+                    </Button>
+                  )}
+                </div>
+              }
+            />
+
+            <div className="mt-5">
+              {filteredManualUndertimes.length === 0 ? (
+                <EmptyState
+                  icon={<Timer className="w-6 h-6" />}
+                  title="No manual undertime entries"
+                  description="Use the form to add a manual undertime record."
+                  bordered
+                />
+              ) : (
+                <ul className="space-y-2">
+                  {filteredManualUndertimes.map((record) => (
+                    <li
+                      key={record.id}
+                      className="rounded-lg border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-900">
+                            {record.name}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {record.date}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Hours: {record.undertimeHours}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-col items-start sm:items-end gap-2 flex-shrink-0">
+                          <p className="text-sm text-slate-600 max-w-sm">
+                            {record.reason}
+                          </p>
+                          <Button
+                            variant="warning"
+                            size="sm"
+                            leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
+                            onClick={() =>
+                              setRestoreTarget({
+                                id: record.id,
+                                name: record.name,
+                                date: record.date,
+                              })
+                            }
+                          >
+                            Restore
+                          </Button>
+                        </div>
+                      </div>
+                    </li>
                   ))}
-                </select>
-
-                {selectedMonth !== "all" && (
-                  <button
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete all manual undertime records for ${formatMonthLabel(selectedMonth)}?`
-                        )
-                      ) {
-                        deleteManualUndertimesByMonth(selectedMonth);
-                        setSelectedMonth("all");
-                        setFeedback({
-                          type: "success",
-                          message: `All manual undertime records for ${formatMonthLabel(selectedMonth)} were removed and restored to Late Records.`,
-                        });
-                      }
-                    }}
-                    className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 text-sm font-medium"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete This Month
-                  </button>
-                )}
-              </div>
+                </ul>
+              )}
             </div>
-
-            {filteredManualUndertimes.length === 0 ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-12 text-center">
-                <Timer className="w-12 h-12 mx-auto text-slate-300 mb-4" />
-                <p className="text-lg font-semibold text-slate-700">
-                  No manual undertime entries
-                </p>
-                <p className="text-sm text-slate-500 mt-1">
-                  Use the form to add a manual undertime record.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredManualUndertimes.map((record) => (
-                  <div
-                    key={record.id}
-                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">{record.name}</p>
-                        <p className="text-xs text-slate-500 mt-1">{record.date}</p>
-                        <p className="text-xs text-slate-500 mt-1">
-                          Undertime Hours: {record.undertimeHours}
-                        </p>
-                      </div>
-
-                      <div className="flex flex-col items-start sm:items-end gap-3">
-                        <div className="text-sm text-slate-600">{record.reason}</div>
-
-                        <button
-                          onClick={() =>
-                            handleRestore(record.id, record.name, record.date)
-                          }
-                          className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100"
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                          Restore
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          </Card>
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmDeleteMonth}
+        tone="danger"
+        title={`Delete manual undertime for ${formatMonthLabel(selectedMonth)}?`}
+        description="All manual undertime records for this month will be removed and restored back to Late Records."
+        confirmLabel="Delete Month"
+        onConfirm={handleDeleteMonth}
+        onCancel={() => setConfirmDeleteMonth(false)}
+      />
+
+      <ConfirmModal
+        open={!!restoreTarget}
+        tone="warning"
+        title="Restore this undertime?"
+        description={
+          restoreTarget ? (
+            <>
+              <span className="font-semibold">{restoreTarget.name}</span> on{" "}
+              {new Date(restoreTarget.date).toLocaleDateString("en-US")} will be
+              moved back to Late Records.
+            </>
+          ) : null
+        }
+        confirmLabel="Restore"
+        onConfirm={handleRestoreConfirm}
+        onCancel={() => setRestoreTarget(null)}
+      />
     </div>
   );
 }

@@ -1,5 +1,14 @@
 import { useMemo, useState } from "react";
+import { Search, Users, Clock, UserX, ShieldCheck } from "lucide-react";
 import { useAttendance } from "../context/AttendanceContext";
+import {
+  PageHeader,
+  StatCard,
+  Card,
+  Input,
+  DataTable,
+  type Column,
+} from "../components/ui";
 
 type MasterEmployee = {
   fullName: string;
@@ -20,7 +29,7 @@ const MASTER_EMPLOYEES: MasterEmployee[] = [
   { fullName: "Codilan, Ian Christopher" },
   { fullName: "Cruz, Gino" },
   { fullName: "Cruz, Nathaniel Philip" },
-  { fullName: "Engay, Lovely Jane" }, 
+  { fullName: "Engay, Lovely Jane" },
   { fullName: "Loterte, Jenny Lyn" },
   { fullName: "Pascua, Joseph" },
   { fullName: "Pascual, Lucky Joy" },
@@ -32,40 +41,39 @@ const MASTER_EMPLOYEES: MasterEmployee[] = [
   { fullName: "Aclan, Junrey" },
   { fullName: "Arroyo, Nilo" },
   { fullName: "Azcueta, Jerwin" },
-  { fullName: "Bajar, Joseph" }, 
-  { fullName: "Bautista, Gerry" }, 
+  { fullName: "Bajar, Joseph" },
+  { fullName: "Bautista, Gerry" },
   { fullName: "Bayan, Juewars" },
-  { fullName: "Bertulfo, Hermilo" }, 
+  { fullName: "Bertulfo, Hermilo" },
   { fullName: "Bido, Alonzo" },
   { fullName: "Bonaobra, Davidson" },
   { fullName: "Cababat, Chesterson" },
-  { fullName: "Caban, Cris" },        
+  { fullName: "Caban, Cris" },
   { fullName: "Calicdan, Ednerson" },
   { fullName: "Campita, Justin" },
   { fullName: "Clemente Jr., Ricardo" },
-  { fullName: "Coste, Welmar" }, 
+  { fullName: "Coste, Welmar" },
   { fullName: "De Jesus, Roy Roldan" },
   { fullName: "Dometita, Bryan Lloyd" },
   { fullName: "Escarcha, Carlito" },
-  { fullName: "Estuaria, Christian" }, 
-  { fullName: "Francisco, Jhon Mar" },  
+  { fullName: "Estuaria, Christian" },
+  { fullName: "Francisco, Jhon Mar" },
   { fullName: "Hiteroza, Isauro" },
-  { fullName: "Magday, Elmer" }, 
+  { fullName: "Magday, Elmer" },
   { fullName: "Mapa, Arnel" },
-  { fullName: "Meeks, Bryan" }, 
-  { fullName: "Obligar, Bernal" }, 
-  { fullName: "Olesco, Alvin" }, 
-  { fullName: "Omapas Jr., Teddy" },    
+  { fullName: "Meeks, Bryan" },
+  { fullName: "Obligar, Bernal" },
+  { fullName: "Olesco, Alvin" },
+  { fullName: "Omapas Jr., Teddy" },
   { fullName: "Omegan, Jayson" },
   { fullName: "Radaza, Marifie" },
   { fullName: "Samson, John Paul" },
   { fullName: "Sisbas, Jessie" },
-  { fullName: "Soriano, Ariel" }, 
+  { fullName: "Soriano, Ariel" },
   { fullName: "Suarez, Elmer" },
-  { fullName: "Urbano, Ronald" }, 
+  { fullName: "Urbano, Ronald" },
   { fullName: "Veruela, John Wally" },
-  { fullName: "Zate, Mario" },                                                                          
-
+  { fullName: "Zate, Mario" },
 ];
 
 function normalizeName(value: string) {
@@ -78,7 +86,7 @@ function normalizeName(value: string) {
 }
 
 function formatMinutes(minutes: number) {
-  if (!minutes || minutes <= 0) return "None";
+  if (!minutes || minutes <= 0) return "—";
 
   const hrs = Math.floor(minutes / 60);
   const mins = minutes % 60;
@@ -89,7 +97,7 @@ function formatMinutes(minutes: number) {
 }
 
 function formatCount(value: number) {
-  return value > 0 ? value : "None";
+  return value > 0 ? value : "—";
 }
 
 function getInitials(name: string) {
@@ -129,13 +137,13 @@ function EmployeeAvatar({ name }: { name: string }) {
         src={photo}
         alt={name}
         onError={() => setHasError(true)}
-        className="h-11 w-11 rounded-full border border-slate-200 object-cover"
+        className="h-10 w-10 rounded-full border border-slate-200 object-cover flex-shrink-0"
       />
     );
   }
 
   return (
-    <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
+    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700 border border-brand-100 flex-shrink-0">
       {getInitials(name)}
     </div>
   );
@@ -213,19 +221,11 @@ export default function EmployeesPage() {
     return Array.from(map.values()).sort((a, b) =>
       a.fullName.localeCompare(b.fullName)
     );
-  }, [
-    lateRecords,
-    exemptions,
-    absences,
-    generatedUndertimes,
-    manualUndertimes,
-  ]);
+  }, [lateRecords, exemptions, absences, generatedUndertimes, manualUndertimes]);
 
   const filteredEmployees = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-
     if (!keyword) return employees;
-
     return employees.filter((emp) =>
       emp.fullName.toLowerCase().includes(keyword)
     );
@@ -237,125 +237,112 @@ export default function EmployeesPage() {
     (e) => e.lateExemptionsCount > 0
   ).length;
 
+  const columns: Column<EmployeeRow>[] = [
+    {
+      key: "employee",
+      header: "Employee",
+      render: (emp) => (
+        <div className="flex items-center gap-3 min-w-0">
+          <EmployeeAvatar name={emp.fullName} />
+          <p className="font-medium text-slate-900 truncate">{emp.fullName}</p>
+        </div>
+      ),
+    },
+    {
+      key: "exemptions",
+      header: "Exemptions",
+      align: "right",
+      render: (emp) => formatCount(emp.lateExemptionsCount),
+    },
+    {
+      key: "absences",
+      header: "Absences",
+      align: "right",
+      render: (emp) => formatCount(emp.absenceCount),
+    },
+    {
+      key: "lates",
+      header: "Lates",
+      align: "right",
+      render: (emp) => (
+        <span className="font-semibold text-slate-900">
+          {formatCount(emp.latesCount)}
+        </span>
+      ),
+    },
+    {
+      key: "undertime",
+      header: "Total Undertime",
+      align: "right",
+      render: (emp) => formatMinutes(emp.totalUndertime),
+    },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Employees</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Permanent employee list with attendance-based totals
-          </p>
-        </div>
+      <PageHeader
+        title="Employees"
+        description="Permanent employee list with attendance-based totals."
+      />
 
-        <div className="w-full lg:w-[360px]">
-          <input
-            type="text"
-            placeholder="Search employee name..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-          />
-        </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Total Employees"
+          value={MASTER_EMPLOYEES.length}
+          icon={Users}
+          tone="brand"
+        />
+        <StatCard
+          label="With Lates"
+          value={withLatesCount}
+          icon={Clock}
+          tone="warning"
+        />
+        <StatCard
+          label="With Absences"
+          value={withAbsencesCount}
+          icon={UserX}
+          tone="danger"
+        />
+        <StatCard
+          label="With Exemptions"
+          value={withExemptionsCount}
+          icon={ShieldCheck}
+          tone="success"
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Total Employees</p>
-          <h2 className="mt-2 text-3xl font-bold text-slate-900">
-            {MASTER_EMPLOYEES.length}
-          </h2>
+      <Card padded={false}>
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-slate-900">
+              Employee Directory
+            </h2>
+            <p className="mt-0.5 text-sm text-slate-500">
+              Counts reflect uploaded attendance and manual entries.
+            </p>
+          </div>
+
+          <div className="w-full sm:w-72">
+            <Input
+              type="search"
+              placeholder="Search employee name..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              leftIcon={<Search className="w-4 h-4" />}
+            />
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">With Lates</p>
-          <h2 className="mt-2 text-3xl font-bold text-slate-900">
-            {withLatesCount}
-          </h2>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">With Absences</p>
-          <h2 className="mt-2 text-3xl font-bold text-slate-900">
-            {withAbsencesCount}
-          </h2>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">With Exemptions</p>
-          <h2 className="mt-2 text-3xl font-bold text-slate-900">
-            {withExemptionsCount}
-          </h2>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h3 className="text-base font-semibold text-slate-900">
-            Employee Search Result
-          </h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Employee records with counts based on uploaded attendance and menu
-            entries
-          </p>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-slate-600">
-              <tr>
-                <th className="px-5 py-3 font-semibold">Employee</th>
-                <th className="px-5 py-3 font-semibold">Late Exemptions</th>
-                <th className="px-5 py-3 font-semibold">Absence Count</th>
-                <th className="px-5 py-3 font-semibold">Lates Count</th>
-                <th className="px-5 py-3 font-semibold">Total Undertime</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {filteredEmployees.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-5 py-14 text-center text-sm text-slate-500"
-                  >
-                    No employee found.
-                  </td>
-                </tr>
-              ) : (
-                filteredEmployees.map((emp) => (
-                  <tr
-                    key={normalizeName(emp.fullName)}
-                    className="border-t border-slate-100 hover:bg-slate-50"
-                  >
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <EmployeeAvatar name={emp.fullName} />
-                        <div className="min-w-0">
-                          <p className="font-medium text-slate-800">
-                            {emp.fullName}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-4 text-slate-600">
-                      {formatCount(emp.lateExemptionsCount)}
-                    </td>
-                    <td className="px-5 py-4 text-slate-600">
-                      {formatCount(emp.absenceCount)}
-                    </td>
-                    <td className="px-5 py-4 text-slate-600">
-                      {formatCount(emp.latesCount)}
-                    </td>
-                    <td className="px-5 py-4 text-slate-600">
-                      {formatMinutes(emp.totalUndertime)}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <DataTable
+          columns={columns}
+          rows={filteredEmployees}
+          rowKey={(emp) => normalizeName(emp.fullName)}
+          emptyTitle="No employee found"
+          emptyDescription="Try adjusting your search."
+          emptyIcon={<Users className="w-6 h-6" />}
+        />
+      </Card>
     </div>
   );
 }
