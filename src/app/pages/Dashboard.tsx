@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
+import { useEmployees } from "../context/EmployeesContext";
 import DragDropUpload, {
   type DragDropUploadHandle,
 } from "../components/layout/DragDropUpload";
@@ -37,15 +38,14 @@ import {
   Button,
   Badge,
   EmptyState,
-  AlertMessage,
   ConfirmModal,
   DataTable,
   DashboardCard,
   DashboardSection,
   FilterToolbar,
+  toast,
   type Column,
 } from "../components/ui";
-import { MASTER_EMPLOYEE_COUNT } from "../data/masterEmployees";
 
 function formatMonthLabel(monthKey: string) {
   if (monthKey === "all") return "All Months";
@@ -99,10 +99,7 @@ export function Dashboard() {
     exportFilteredWorkbook,
   } = useAttendance();
 
-  const [feedback, setFeedback] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
+  const { activeEmployeeCount } = useEmployees();
 
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
   const uploadRef = useRef<DragDropUploadHandle | null>(null);
@@ -137,10 +134,11 @@ export function Dashboard() {
 
   const handleExcelExport = async () => {
     const result = await exportFilteredWorkbook();
-    setFeedback({
-      type: result.success ? "success" : "error",
-      message: result.message,
-    });
+    if (result.success) {
+      toast.success("Report exported", result.message);
+    } else {
+      toast.error("Export failed", result.message);
+    }
   };
 
   const handleDragDropUpload = (file: File) => {
@@ -162,18 +160,16 @@ export function Dashboard() {
 
     if (confirmState.kind === "clear-all") {
       clearAllAttendanceHistory();
-      setFeedback({
-        type: "success",
-        message:
-          "All uploaded attendance history and related records were cleared.",
-      });
+      toast.success(
+        "History cleared",
+        "All uploaded attendance and related records were cleared."
+      );
     } else if (confirmState.kind === "delete-file") {
       deleteUploadedFile(confirmState.fileId);
-      setFeedback({
-        type: "success",
-        message:
-          "Uploaded file deleted. Related exemption, absence, and manual undertime records for removed dates were also cleaned.",
-      });
+      toast.success(
+        "File deleted",
+        "Exemption, absence, and manual undertime records for the removed dates were also cleaned."
+      );
     }
 
     setConfirmState(null);
@@ -345,15 +341,6 @@ export function Dashboard() {
         canReset={canResetFilters}
       />
 
-      {feedback && (
-        <AlertMessage
-          tone={feedback.type}
-          title="System message"
-          message={feedback.message}
-          onDismiss={() => setFeedback(null)}
-        />
-      )}
-
       <DashboardSection
         eyebrow="Overview"
         title="Key Attendance Metrics"
@@ -362,7 +349,7 @@ export function Dashboard() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Total Employees"
-            value={MASTER_EMPLOYEE_COUNT}
+            value={activeEmployeeCount}
             icon={Users}
             tone="brand"
             accent
@@ -589,9 +576,7 @@ export function Dashboard() {
               ref={uploadRef}
               density="compact"
               onFileSelect={handleDragDropUpload}
-              onInvalidFile={(message) =>
-                setFeedback({ type: "error", message })
-              }
+              onInvalidFile={(message) => toast.error("Upload error", message)}
             />
 
             {fileName && (

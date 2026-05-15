@@ -25,6 +25,7 @@ import {
   saveMemoReads,
   saveUploadedAttendanceFile,
 } from "../services/attendanceService";
+import { toast } from "../components/ui";
 
 
 export interface LateRecord {
@@ -542,7 +543,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     if (!file) return;
 
     if (!workspace) {
-      alert("Please login first before uploading attendance files.");
+      toast.error(
+        "Not signed in",
+        "Please log in before uploading attendance files."
+      );
       return;
     }
 
@@ -680,7 +684,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
           });
 
           if (parsedLateRecords.length === 0 && parsedGeneratedUndertime.length === 0) {
-            alert("No late or undertime records were found in this file.");
+            toast.warning(
+              "Nothing to import",
+              "No late or undertime records were found in this file."
+            );
 
             if (e.target) {
               e.target.value = "";
@@ -712,7 +719,8 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
           }
         } catch (error) {
           console.error("Error reading or saving Excel file:", error);
-          alert(
+          toast.error(
+            "Upload failed",
             error instanceof Error
               ? error.message
               : "Error reading or saving Excel file. Please check the format."
@@ -774,7 +782,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     if (workspace) {
       void saveExemptionRecord(workspace, newExemption).catch((error) => {
         console.error("Failed to save exemption to Supabase:", error);
-        alert("Exemption was added on screen but failed to save to database.");
+        toast.error(
+          "Database sync failed",
+          "Exemption was added on screen but failed to save to database."
+        );
       });
     }
 
@@ -806,7 +817,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     if (workspace) {
       void saveAbsenceRecord(workspace, newAbsence).catch((error) => {
         console.error("Failed to save absence to Supabase:", error);
-        alert("Absence was added on screen but failed to save to database.");
+        toast.error(
+          "Database sync failed",
+          "Absence was added on screen but failed to save to database."
+        );
       });
     }
 
@@ -855,7 +869,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     if (workspace) {
       void saveManualUndertimeRecord(workspace, newUndertime).catch((error) => {
         console.error("Failed to save manual undertime to Supabase:", error);
-        alert("Undertime was added on screen but failed to save to database.");
+        toast.error(
+          "Database sync failed",
+          "Undertime was added on screen but failed to save to database."
+        );
       });
     }
 
@@ -913,7 +930,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     if (workspace) {
       void saveManualUndertimeRecord(workspace, newUndertime).catch((error) => {
         console.error("Failed to save converted undertime to Supabase:", error);
-        alert("Converted undertime was added on screen but failed to save to database.");
+        toast.error(
+          "Database sync failed",
+          "Converted undertime was added on screen but failed to save to database."
+        );
       });
     }
 
@@ -933,7 +953,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       if (workspace) {
         void deleteUploadedAttendanceFile(fileId).catch((error) => {
           console.error("Failed to delete uploaded file from Supabase:", error);
-          alert("File was removed on screen but failed to delete from database.");
+          toast.error(
+            "Database sync failed",
+            "File was removed on screen but failed to delete from database."
+          );
         });
       }
 
@@ -1002,7 +1025,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     if (workspace) {
       void clearWorkspaceAttendanceData(workspace).catch((error) => {
         console.error("Failed to clear Supabase attendance data:", error);
-        alert("Records were cleared on screen but failed to clear from database.");
+        toast.error(
+          "Database sync failed",
+          "Records were cleared on screen but failed to clear from database."
+        );
       });
     }
 

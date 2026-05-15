@@ -19,6 +19,8 @@ type Props<T> = {
   emptyIcon?: ReactNode;
   className?: string;
   dense?: boolean;
+  stickyHeader?: boolean;
+  maxHeight?: string;
 };
 
 const alignClass = {
@@ -36,6 +38,8 @@ export function DataTable<T>({
   emptyIcon,
   className = "",
   dense = false,
+  stickyHeader = false,
+  maxHeight,
 }: Props<T>) {
   if (rows.length === 0) {
     return (
@@ -50,11 +54,19 @@ export function DataTable<T>({
   }
 
   const cellPad = dense ? "px-4 py-2.5" : "px-5 py-3.5";
+  const scrollStyle = maxHeight ? { maxHeight } : undefined;
 
   return (
-    <div className={`overflow-x-auto ${className}`}>
+    <div
+      className={`overflow-x-auto ${stickyHeader ? "overflow-y-auto" : ""} ${className}`}
+      style={scrollStyle}
+    >
       <table className="min-w-full text-sm border-collapse">
-        <thead className="bg-slate-50 border-y border-slate-200">
+        <thead
+          className={`bg-slate-50 border-y border-slate-200 ${
+            stickyHeader ? "sticky top-0 z-10" : ""
+          }`}
+        >
           <tr>
             {columns.map((c) => (
               <th
@@ -72,7 +84,7 @@ export function DataTable<T>({
           {rows.map((row, idx) => (
             <tr
               key={rowKey(row, idx)}
-              className="hover:bg-slate-50/70 transition-colors"
+              className="hover:bg-brand-50/30 transition-colors"
             >
               {columns.map((c) => (
                 <td
