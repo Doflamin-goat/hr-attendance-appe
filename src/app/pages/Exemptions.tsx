@@ -19,6 +19,7 @@ import {
   AlertMessage,
   ConfirmModal,
   SectionHeader,
+  SkeletonTable,
 } from "../components/ui";
 
 function getSafeDate(dateValue: string) {
@@ -43,6 +44,7 @@ type RestoreTarget = { id: string; name: string; date: string } | null;
 
 export function Exemptions() {
   const {
+    loading,
     exemptions,
     addExemption,
     deleteExemptionsByMonth,
@@ -235,17 +237,23 @@ export function Exemptions() {
             />
           </Card>
 
-          {filteredExemptions.length === 0 ? (
+          {loading ? (
+            <Card padded={false}>
+              <SkeletonTable rows={4} columns={4} />
+            </Card>
+          ) : filteredExemptions.length === 0 ? (
             <Card>
               <EmptyState
                 icon={<ShieldCheck className="w-6 h-6" />}
-                title="No exemptions recorded"
+                title={
+                  selectedMonth === "all"
+                    ? "No exemptions found"
+                    : `No exemptions for ${formatMonthLabel(selectedMonth)}`
+                }
                 description={
                   selectedMonth === "all"
-                    ? "Use the form to add an approved exemption."
-                    : `No exemption records found for ${formatMonthLabel(
-                        selectedMonth
-                      )}.`
+                    ? "Use the form on the left to add an approved exemption."
+                    : "Switch the filter or add an exemption from the form on the left."
                 }
                 bordered={false}
               />

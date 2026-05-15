@@ -111,6 +111,7 @@ interface PersistedAttendanceData {
 }
 
 interface AttendanceState {
+  loading: boolean;
   fileName: string;
   uploadedFiles: UploadedAttendanceFile[];
   lateRecords: LateRecord[];
@@ -1722,6 +1723,7 @@ const getTeam = (name: string) => {
   return (
     <AttendanceContext.Provider
       value={{
+        loading: authLoading || !isStorageHydrated,
         fileName,
         uploadedFiles,
         lateRecords,

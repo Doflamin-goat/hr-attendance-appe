@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
+import { normalizeEmployeeName } from "../services/employeeService";
 import DragDropUpload, {
   type DragDropUploadHandle,
 } from "../components/layout/DragDropUpload";
@@ -21,6 +23,12 @@ import {
   Hourglass,
   CalendarRange,
   TrendingUp,
+  ShieldCheck,
+  UserPlus,
+  ShieldAlert,
+  CheckCircle,
+  ArrowRight,
+  UserSearch,
 } from "lucide-react";
 import {
   BarChart,
@@ -43,6 +51,8 @@ import {
   DashboardCard,
   DashboardSection,
   FilterToolbar,
+  SkeletonStatGrid,
+  SkeletonDashboardCard,
   toast,
   type Column,
 } from "../components/ui";
@@ -78,6 +88,7 @@ type UploadedFileRow = {
 
 export function Dashboard() {
   const {
+    loading: attendanceLoading,
     handleFileUpload,
     fileName,
     uploadedFiles,
@@ -99,7 +110,9 @@ export function Dashboard() {
     exportFilteredWorkbook,
   } = useAttendance();
 
-  const { activeEmployeeCount } = useEmployees();
+  const { activeEmployeeCount, employees, loading: employeesLoading } = useEmployees();
+  const navigate = useNavigate();
+  const isLoading = attendanceLoading || (employeesLoading && employees.length === 0);
 
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
   const uploadRef = useRef<DragDropUploadHandle | null>(null);
@@ -200,6 +213,173 @@ export function Dashboard() {
     ],
     [dayScopeOptions, selectedMonthScope]
   );
+
+  const repeatedLateOffenders = useMemo(
+    () => lateSummary.filter((entry) => entry.totalLates >= 3),
+    [lateSummary]
+  );
+
+  const unregisteredEmployeeNames = useMemo(() => {
+    if (lateRecords.length === 0 && absences.length === 0) return [] as string[];
+
+    const registered = new Set(
+      employees.map((emp) => normalizeEmployeeName(emp.fullName))
+    );
+
+    const seen = new Set<string>();
+    const collect = (name: string) => {
+      const clean = name?.trim();
+      if (!clean) return;
+      const key = normalizeEmployeeName(clean);
+      if (!key || registered.has(key) || seen.has(key)) return;
+      seen.add(key);
+    };
+
+    lateRecords.forEach((r) => collect(r.name));
+    absences.forEach((r) => collect(r.name));
+
+    return Array.from(seen);
+  }, [employees, lateRecords, absences]);
+
+  const attentionItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      tone: "warning" | "danger" | "info";
+      icon: typeof AlertTriangle;
+      title: string;
+      description: string;
+      cta: { label: string; onClick: () => void };
+    }> = [];
+
+    if (memoAlerts.length > 0) {
+      items.push({
+        id: "memo",
+        tone: "danger",
+        icon: Bell,
+        title: `${memoAlerts.length} pending memo${
+          memoAlerts.length === 1 ? "" : "s"
+        }`,
+        description:
+          unreadMemoCount > 0
+            ? `${unreadMemoCount} unread. Employees crossed the 4-late threshold.`
+            : "Employees crossed the 4-late threshold and need review.",
+        cta: { label: "Review", onClick: () => navigate("/lates") },
+      });
+    }
+
+    if (repeatedLateOffenders.length > 0) {
+      items.push({
+        id: "repeated-lates",
+        tone: "warning",
+        icon: AlertTriangle,
+        title: `${repeatedLateOffenders.length} employee${
+          repeatedLateOffenders.length === 1 ? "" : "s"
+        } with repeated lates`,
+        description: "Three or more late arrivals in the selected scope.",
+        cta: { label: "View lates", onClick: () => navigate("/lates") },
+      });
+    }
+
+    if (absences.length > 0) {
+      items.push({
+        id: "absences",
+        tone: "warning",
+        icon: UserX,
+        title: `${absences.length} absence${absences.length === 1 ? "" : "s"} logged`,
+        description: "Recorded absences in the current scope.",
+        cta: { label: "View absences", onClick: () => navigate("/absences") },
+      });
+    }
+
+    if (unregisteredEmployeeNames.length > 0) {
+      items.push({
+        id: "unregistered",
+        tone: "info",
+        icon: UserSearch,
+        title: `${unregisteredEmployeeNames.length} unregistered employee${
+          unregisteredEmployeeNames.length === 1 ? "" : "s"
+        }`,
+        description:
+          "Names found in attendance uploads are not in the employee directory yet.",
+        cta: {
+          label: "Register",
+          onClick: () => navigate("/employees"),
+        },
+      });
+    }
+
+    return items;
+  }, [
+    memoAlerts.length,
+    unreadMemoCount,
+    repeatedLateOffenders.length,
+    absences.length,
+    unregisteredEmployeeNames.length,
+    navigate,
+  ]);
+
+  const attentionToneClasses: Record<
+    "warning" | "danger" | "info",
+    { wrap: string; icon: string }
+  > = {
+    warning: {
+      wrap: "border-warning-100 bg-warning-50/40",
+      icon: "bg-warning-50 text-warning-700 border border-warning-100",
+    },
+    danger: {
+      wrap: "border-danger-100 bg-danger-50/40",
+      icon: "bg-danger-50 text-danger-700 border border-danger-100",
+    },
+    info: {
+      wrap: "border-sky-100 bg-sky-50/40",
+      icon: "bg-sky-50 text-sky-700 border border-sky-100",
+    },
+  };
+
+  const quickActions = [
+    {
+      label: "Upload Attendance",
+      description: "Import a daily biometric Excel file.",
+      icon: UploadCloud,
+      tone: "brand" as const,
+      onClick: () => uploadRef.current?.open(),
+    },
+    {
+      label: "Add Employee",
+      description: "Register a new APP or WAIS employee.",
+      icon: UserPlus,
+      tone: "info" as const,
+      onClick: () => navigate("/employees"),
+    },
+    {
+      label: "Add Exemption",
+      description: "Excuse a late arrival on record.",
+      icon: ShieldCheck,
+      tone: "success" as const,
+      onClick: () => navigate("/exemptions"),
+    },
+    {
+      label: "Export Report",
+      description: "Generate Excel for the current scope.",
+      icon: Download,
+      tone: "warning" as const,
+      onClick: () => {
+        void handleExcelExport();
+      },
+    },
+  ];
+
+  const quickActionTones: Record<
+    "brand" | "success" | "warning" | "info",
+    string
+  > = {
+    brand: "bg-brand-50 text-brand-700 border-brand-100 group-hover:bg-brand-100",
+    success:
+      "bg-success-50 text-success-700 border-success-100 group-hover:bg-success-100",
+    warning:
+      "bg-warning-50 text-warning-700 border-warning-100 group-hover:bg-warning-100",
+    info: "bg-sky-50 text-sky-700 border-sky-100 group-hover:bg-sky-100",
+  };
 
   const uploadedRows: UploadedFileRow[] = useMemo(
     () =>
@@ -342,49 +522,168 @@ export function Dashboard() {
       />
 
       <DashboardSection
-        eyebrow="Overview"
-        title="Key Attendance Metrics"
-        description="Headline figures for the current scope."
+        eyebrow="Shortcuts"
+        title="Quick Actions"
+        description="Jump straight to the most common HR tasks."
       >
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            label="Total Employees"
-            value={activeEmployeeCount}
-            icon={Users}
-            tone="brand"
-            accent
-            hint="Active roster"
-          />
-          <StatCard
-            label="Late Records"
-            value={lateRecords.length}
-            icon={Clock}
-            tone="warning"
-            accent
-            hint="In selected scope"
-          />
-          <StatCard
-            label="Absences"
-            value={absences.length}
-            icon={UserX}
-            tone="danger"
-            accent
-            hint="In selected scope"
-          />
-          <StatCard
-            label="Memo Alerts"
-            value={memoAlerts.length}
-            icon={Bell}
-            tone="warning"
-            accent
-            hint={
-              unreadMemoCount > 0
-                ? `${unreadMemoCount} unread`
-                : "All reviewed"
-            }
-          />
+          {quickActions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.onClick}
+                className="group relative flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_8px_20px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+              >
+                <div
+                  className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-colors flex-shrink-0 ${quickActionTones[action.tone]}`}
+                >
+                  <Icon className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900 leading-tight">
+                    {action.label}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500 leading-snug">
+                    {action.description}
+                  </p>
+                </div>
+                <ArrowRight className="w-4 h-4 text-slate-300 transition-colors group-hover:text-slate-500 flex-shrink-0 mt-1" />
+              </button>
+            );
+          })}
         </div>
       </DashboardSection>
+
+      <DashboardSection
+        eyebrow="Action Required"
+        title="Needs Attention"
+        description="Important HR alerts for the current scope."
+      >
+        <DashboardCard
+          icon={
+            attentionItems.length > 0 ? (
+              <ShieldAlert className="w-4.5 h-4.5" />
+            ) : (
+              <CheckCircle className="w-4.5 h-4.5" />
+            )
+          }
+          iconTone={attentionItems.length > 0 ? "warning" : "success"}
+          title={
+            attentionItems.length > 0
+              ? `${attentionItems.length} item${
+                  attentionItems.length === 1 ? "" : "s"
+                } need attention`
+              : "All clear"
+          }
+          description={
+            attentionItems.length > 0
+              ? "Review and resolve to keep records up to date."
+              : "No urgent attendance issues for the selected scope."
+          }
+          padded={attentionItems.length === 0}
+        >
+          {attentionItems.length === 0 ? (
+            <div className="flex items-center gap-3 rounded-lg border border-success-100 bg-success-50/60 px-4 py-3">
+              <CheckCircle className="w-5 h-5 text-success-700 flex-shrink-0" />
+              <p className="text-sm text-success-700">
+                All clear. No urgent attendance issues for the selected scope.
+              </p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {attentionItems.map((item) => {
+                const Icon = item.icon;
+                const tones = attentionToneClasses[item.tone];
+                return (
+                  <li
+                    key={item.id}
+                    className={`flex items-start gap-3 px-5 py-3.5 border-l-2 transition-colors ${tones.wrap}`}
+                  >
+                    <div
+                      className={`mt-0.5 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${tones.icon}`}
+                    >
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {item.title}
+                      </p>
+                      <p className="text-xs text-slate-600 mt-0.5 leading-5">
+                        {item.description}
+                      </p>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
+                      onClick={item.cta.onClick}
+                    >
+                      {item.cta.label}
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </DashboardCard>
+      </DashboardSection>
+
+      {isLoading ? (
+        <DashboardSection
+          eyebrow="Overview"
+          title="Key Attendance Metrics"
+          description="Loading the latest figures..."
+        >
+          <SkeletonStatGrid count={4} />
+        </DashboardSection>
+      ) : (
+        <DashboardSection
+          eyebrow="Overview"
+          title="Key Attendance Metrics"
+          description="Headline figures for the current scope."
+        >
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Total Employees"
+              value={activeEmployeeCount}
+              icon={Users}
+              tone="brand"
+              accent
+              hint="Active roster"
+            />
+            <StatCard
+              label="Late Records"
+              value={lateRecords.length}
+              icon={Clock}
+              tone="warning"
+              accent
+              hint="In selected scope"
+            />
+            <StatCard
+              label="Absences"
+              value={absences.length}
+              icon={UserX}
+              tone="danger"
+              accent
+              hint="In selected scope"
+            />
+            <StatCard
+              label="Memo Alerts"
+              value={memoAlerts.length}
+              icon={Bell}
+              tone="warning"
+              accent
+              hint={
+                unreadMemoCount > 0
+                  ? `${unreadMemoCount} unread`
+                  : "All reviewed"
+              }
+            />
+          </div>
+        </DashboardSection>
+      )}
 
       <DashboardSection
         eyebrow="Secondary"
@@ -424,6 +723,14 @@ export function Dashboard() {
         title="Late Activity Analysis"
         description="Top late offenders and their cumulative late minutes."
       >
+        {isLoading ? (
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+            <div className="xl:col-span-2">
+              <SkeletonDashboardCard lines={6} />
+            </div>
+            <SkeletonDashboardCard lines={4} />
+          </div>
+        ) : (
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
           <DashboardCard
             className="xl:col-span-2"
@@ -557,6 +864,7 @@ export function Dashboard() {
             )}
           </DashboardCard>
         </div>
+        )}
       </DashboardSection>
 
       <DashboardSection

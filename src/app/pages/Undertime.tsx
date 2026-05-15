@@ -19,6 +19,7 @@ import {
   AlertMessage,
   ConfirmModal,
   SectionHeader,
+  SkeletonTable,
 } from "../components/ui";
 
 function getMonthKey(dateValue: string) {
@@ -38,6 +39,7 @@ type RestoreTarget = { id: string; name: string; date: string } | null;
 
 export function Undertime() {
   const {
+    loading,
     generatedUndertimes,
     manualUndertimes,
     addUndertime,
@@ -193,11 +195,13 @@ export function Undertime() {
           />
 
           <div className="mt-5">
-            {generatedUndertimes.length === 0 ? (
+            {loading ? (
+              <SkeletonTable rows={4} columns={3} />
+            ) : generatedUndertimes.length === 0 ? (
               <EmptyState
                 icon={<Timer className="w-6 h-6" />}
-                title="No system-generated undertime"
-                description="Records will appear automatically when attendance files indicate undertime."
+                title="No undertime detected"
+                description="Records will appear automatically when uploaded attendance files indicate undertime."
                 bordered
               />
             ) : (
@@ -328,11 +332,17 @@ export function Undertime() {
             />
 
             <div className="mt-5">
-              {filteredManualUndertimes.length === 0 ? (
+              {loading ? (
+                <SkeletonTable rows={4} columns={3} />
+              ) : filteredManualUndertimes.length === 0 ? (
                 <EmptyState
                   icon={<Timer className="w-6 h-6" />}
-                  title="No manual undertime entries"
-                  description="Use the form to add a manual undertime record."
+                  title={
+                    selectedMonth === "all"
+                      ? "No manual undertime entries"
+                      : `No entries for ${formatMonthLabel(selectedMonth)}`
+                  }
+                  description="Use the form on the left to add an approved manual undertime."
                   bordered
                 />
               ) : (

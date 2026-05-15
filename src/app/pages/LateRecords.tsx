@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Clock, Search, AlertCircle, X } from "lucide-react";
+import { Clock, Search, X, FileSpreadsheet } from "lucide-react";
 import { useAttendance, type LateRecord } from "../context/AttendanceContext";
 import {
   PageHeader,
@@ -10,6 +10,8 @@ import {
   Select,
   AlertMessage,
   DataTable,
+  EmptyState,
+  SkeletonTable,
   type Column,
 } from "../components/ui";
 
@@ -31,7 +33,8 @@ function Avatar({ name }: { name: string }) {
 }
 
 export function LateRecords() {
-  const { lateRecords, lateSummary, convertLateToUndertime } = useAttendance();
+  const { loading, lateRecords, lateSummary, convertLateToUndertime } =
+    useAttendance();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<"detailed" | "summary">("detailed");
@@ -222,13 +225,21 @@ export function LateRecords() {
           </div>
         </div>
 
-        {activeTab === "detailed" ? (
+        {loading ? (
+          <SkeletonTable rows={6} columns={5} />
+        ) : activeTab === "detailed" ? (
           <DataTable
             columns={detailedColumns}
             rows={filteredRecords}
             rowKey={(r) => r.id}
-            emptyTitle="No late records found"
-            emptyDescription="Upload a valid Excel file to view late arrivals."
+            emptyTitle={
+              searchTerm ? "No matching late records" : "No late records found"
+            }
+            emptyDescription={
+              searchTerm
+                ? "Try a different employee name or clear the search."
+                : "Upload a daily attendance Excel file from the dashboard to populate this view."
+            }
             emptyIcon={<Clock className="w-6 h-6" />}
           />
         ) : filteredSummary.length > 0 ? (
@@ -236,7 +247,7 @@ export function LateRecords() {
             {filteredSummary.map((item) => (
               <div
                 key={item.name}
-                className="bg-white rounded-lg border border-slate-200 p-4 hover:border-slate-300 transition-colors"
+                className="bg-white rounded-lg border border-slate-200 p-4 hover:border-slate-300 hover:shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition-all duration-200"
               >
                 <div className="flex justify-between items-start mb-3">
                   <Avatar name={item.name} />
@@ -255,15 +266,17 @@ export function LateRecords() {
             ))}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <AlertCircle className="w-10 h-10 text-slate-300 mb-3" />
-            <p className="text-base font-semibold text-slate-700">
-              No summary available
-            </p>
-            <p className="text-sm text-slate-500 mt-1">
-              Upload a valid Excel file to generate summary.
-            </p>
-          </div>
+          <EmptyState
+            icon={<FileSpreadsheet className="w-6 h-6" />}
+            title={searchTerm ? "No matching summary" : "No summary available"}
+            description={
+              searchTerm
+                ? "Try a different employee name or clear the search."
+                : "Upload a valid attendance file to generate the summary."
+            }
+            bordered={false}
+            className="py-16"
+          />
         )}
       </Card>
 

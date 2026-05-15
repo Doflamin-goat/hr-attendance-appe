@@ -13,6 +13,7 @@ import {
   AlertMessage,
   ConfirmModal,
   SectionHeader,
+  SkeletonTable,
 } from "../components/ui";
 
 function getSafeDate(dateValue: string) {
@@ -34,7 +35,8 @@ function formatMonthLabel(monthKey: string) {
 }
 
 export function Absences() {
-  const { absences, addAbsence, deleteAbsencesByMonth } = useAttendance();
+  const { loading, absences, addAbsence, deleteAbsencesByMonth } =
+    useAttendance();
 
   const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
   const [feedback, setFeedback] = useState<{
@@ -224,11 +226,17 @@ export function Absences() {
             />
 
             <div className="mt-5">
-              {filteredAbsences.length === 0 ? (
+              {loading ? (
+                <SkeletonTable rows={4} columns={4} />
+              ) : filteredAbsences.length === 0 ? (
                 <EmptyState
                   icon={<UserX className="w-6 h-6" />}
-                  title="No absence records"
-                  description="Use the form to add a noted absence."
+                  title={
+                    selectedMonth === "all"
+                      ? "No absences found"
+                      : `No absences for ${formatMonthLabel(selectedMonth)}`
+                  }
+                  description="Use the form on the left to log an approved or noted absence."
                   bordered
                 />
               ) : (
