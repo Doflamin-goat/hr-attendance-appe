@@ -7,52 +7,52 @@ import DragDropUpload, {
   type DragDropUploadHandle,
 } from "../components/layout/DragDropUpload";
 import {
-  FileSpreadsheet,
-  Users,
-  Clock,
-  Timer,
-  UserX,
+  AlertTriangle,
+  ArrowRight,
   BarChart3,
   Bell,
-  AlertTriangle,
-  Trash2,
-  FolderOpen,
-  CheckCircle2,
-  Download,
-  UploadCloud,
-  Hourglass,
   CalendarRange,
-  TrendingUp,
-  ShieldCheck,
-  UserPlus,
-  ShieldAlert,
   CheckCircle,
-  ArrowRight,
+  CheckCircle2,
+  Clock,
+  Download,
+  FileSpreadsheet,
+  FolderOpen,
+  Hourglass,
+  ShieldAlert,
+  ShieldCheck,
+  Timer,
+  Trash2,
+  UploadCloud,
+  UserPlus,
   UserSearch,
+  Users,
+  UserX,
+  X,
 } from "lucide-react";
 import {
-  BarChart,
   Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
 } from "recharts";
 import {
-  PageHeader,
-  StatCard,
-  Button,
   Badge,
-  EmptyState,
+  Button,
   ConfirmModal,
-  DataTable,
   DashboardCard,
   DashboardSection,
+  DataTable,
+  EmptyState,
   FilterToolbar,
-  SkeletonStatGrid,
+  PageHeader,
   SkeletonDashboardCard,
+  SkeletonStatGrid,
+  StatCard,
   toast,
   type Column,
 } from "../components/ui";
@@ -110,12 +110,18 @@ export function Dashboard() {
     exportFilteredWorkbook,
   } = useAttendance();
 
-  const { activeEmployeeCount, employees, loading: employeesLoading } = useEmployees();
+  const { activeEmployeeCount, employees, loading: employeesLoading } =
+    useEmployees();
+
   const navigate = useNavigate();
-  const isLoading = attendanceLoading || (employeesLoading && employees.length === 0);
+  const uploadRef = useRef<DragDropUploadHandle | null>(null);
+
+  const isLoading =
+    attendanceLoading || (employeesLoading && employees.length === 0);
 
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
-  const uploadRef = useRef<DragDropUploadHandle | null>(null);
+  const [showRepeatedLatesModal, setShowRepeatedLatesModal] = useState(false);
+  const [showPendingMemoModal, setShowPendingMemoModal] = useState(false);
 
   const topLates = useMemo(() => lateSummary.slice(0, 5), [lateSummary]);
 
@@ -140,6 +146,79 @@ export function Dashboard() {
   const canResetFilters =
     selectedMonthScope !== "all" || selectedDayScope !== "all";
 
+  const monthOptions = useMemo(
+    () => [
+      { value: "all", label: "All Months" },
+      ...monthScopeOptions.map((month) => ({
+        value: month,
+        label: formatMonthLabel(month),
+      })),
+    ],
+    [monthScopeOptions]
+  );
+
+  const dayOptions = useMemo(
+    () => [
+      {
+        value: "all",
+        label:
+          selectedMonthScope === "all" ? "All Dates" : "All Dates in Month",
+      },
+      ...dayScopeOptions.map((day) => ({
+        value: day,
+        label: formatDayLabel(day),
+      })),
+    ],
+    [dayScopeOptions, selectedMonthScope]
+  );
+
+  const repeatedLateOffenders = useMemo(
+    () => lateSummary.filter((entry) => entry.totalLates >= 3),
+    [lateSummary]
+  );
+
+  const unregisteredEmployeeNames = useMemo(() => {
+    if (lateRecords.length === 0 && absences.length === 0) return [] as string[];
+
+    const registered = new Set(
+      employees.map((employee) => normalizeEmployeeName(employee.fullName))
+    );
+    const seen = new Set<string>();
+
+    const collect = (name: string) => {
+      const clean = name?.trim();
+      if (!clean) return;
+
+      const key = normalizeEmployeeName(clean);
+      if (!key || registered.has(key) || seen.has(key)) return;
+
+      seen.add(key);
+    };
+
+    lateRecords.forEach((record) => collect(record.name));
+    absences.forEach((record) => collect(record.name));
+
+    return Array.from(seen);
+  }, [employees, lateRecords, absences]);
+
+  const uploadedRows = useMemo<UploadedFileRow[]>(
+    () =>
+      uploadedFiles.map((file) => ({
+        id: file.id,
+        fileName: file.fileName,
+        uploadedAt: new Date(file.uploadedAt).toLocaleString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        lates: file.lateRecords.length,
+        undertime: file.generatedUndertimes.length,
+      })),
+    [uploadedFiles]
+  );
+
   const handleResetFilters = () => {
     setSelectedMonthScope("all");
     setSelectedDayScope("all");
@@ -147,6 +226,7 @@ export function Dashboard() {
 
   const handleExcelExport = async () => {
     const result = await exportFilteredWorkbook();
+
     if (result.success) {
       toast.success("Report exported", result.message);
     } else {
@@ -177,7 +257,9 @@ export function Dashboard() {
         "History cleared",
         "All uploaded attendance and related records were cleared."
       );
-    } else if (confirmState.kind === "delete-file") {
+    }
+
+    if (confirmState.kind === "delete-file") {
       deleteUploadedFile(confirmState.fileId);
       toast.success(
         "File deleted",
@@ -187,59 +269,6 @@ export function Dashboard() {
 
     setConfirmState(null);
   };
-
-  const monthOptions = useMemo(
-    () => [
-      { value: "all", label: "All Months" },
-      ...monthScopeOptions.map((m) => ({
-        value: m,
-        label: formatMonthLabel(m),
-      })),
-    ],
-    [monthScopeOptions]
-  );
-
-  const dayOptions = useMemo(
-    () => [
-      {
-        value: "all",
-        label:
-          selectedMonthScope === "all" ? "All Dates" : "All Dates in Month",
-      },
-      ...dayScopeOptions.map((d) => ({
-        value: d,
-        label: formatDayLabel(d),
-      })),
-    ],
-    [dayScopeOptions, selectedMonthScope]
-  );
-
-  const repeatedLateOffenders = useMemo(
-    () => lateSummary.filter((entry) => entry.totalLates >= 3),
-    [lateSummary]
-  );
-
-  const unregisteredEmployeeNames = useMemo(() => {
-    if (lateRecords.length === 0 && absences.length === 0) return [] as string[];
-
-    const registered = new Set(
-      employees.map((emp) => normalizeEmployeeName(emp.fullName))
-    );
-
-    const seen = new Set<string>();
-    const collect = (name: string) => {
-      const clean = name?.trim();
-      if (!clean) return;
-      const key = normalizeEmployeeName(clean);
-      if (!key || registered.has(key) || seen.has(key)) return;
-      seen.add(key);
-    };
-
-    lateRecords.forEach((r) => collect(r.name));
-    absences.forEach((r) => collect(r.name));
-
-    return Array.from(seen);
-  }, [employees, lateRecords, absences]);
 
   const attentionItems = useMemo(() => {
     const items: Array<{
@@ -263,7 +292,7 @@ export function Dashboard() {
           unreadMemoCount > 0
             ? `${unreadMemoCount} unread. Employees crossed the 4-late threshold.`
             : "Employees crossed the 4-late threshold and need review.",
-        cta: { label: "Review", onClick: () => navigate("/lates") },
+        cta: { label: "Review", onClick: () => setShowPendingMemoModal(true) },
       });
     }
 
@@ -276,7 +305,10 @@ export function Dashboard() {
           repeatedLateOffenders.length === 1 ? "" : "s"
         } with repeated lates`,
         description: "Three or more late arrivals in the selected scope.",
-        cta: { label: "View lates", onClick: () => navigate("/lates") },
+        cta: {
+          label: "View lates",
+          onClick: () => setShowRepeatedLatesModal(true),
+        },
       });
     }
 
@@ -285,7 +317,9 @@ export function Dashboard() {
         id: "absences",
         tone: "warning",
         icon: UserX,
-        title: `${absences.length} absence${absences.length === 1 ? "" : "s"} logged`,
+        title: `${absences.length} absence${
+          absences.length === 1 ? "" : "s"
+        } logged`,
         description: "Recorded absences in the current scope.",
         cta: { label: "View absences", onClick: () => navigate("/absences") },
       });
@@ -301,21 +335,18 @@ export function Dashboard() {
         }`,
         description:
           "Names found in attendance uploads are not in the employee directory yet.",
-        cta: {
-          label: "Register",
-          onClick: () => navigate("/employees"),
-        },
+        cta: { label: "Register", onClick: () => navigate("/employees") },
       });
     }
 
     return items;
   }, [
-    memoAlerts.length,
-    unreadMemoCount,
-    repeatedLateOffenders.length,
     absences.length,
-    unregisteredEmployeeNames.length,
+    memoAlerts.length,
     navigate,
+    repeatedLateOffenders.length,
+    unreadMemoCount,
+    unregisteredEmployeeNames.length,
   ]);
 
   const attentionToneClasses: Record<
@@ -324,15 +355,15 @@ export function Dashboard() {
   > = {
     warning: {
       wrap: "border-warning-100 bg-warning-50/40",
-      icon: "bg-warning-50 text-warning-700 border border-warning-100",
+      icon: "border border-warning-100 bg-warning-50 text-warning-700",
     },
     danger: {
       wrap: "border-danger-100 bg-danger-50/40",
-      icon: "bg-danger-50 text-danger-700 border border-danger-100",
+      icon: "border border-danger-100 bg-danger-50 text-danger-700",
     },
     info: {
       wrap: "border-sky-100 bg-sky-50/40",
-      icon: "bg-sky-50 text-sky-700 border border-sky-100",
+      icon: "border border-sky-100 bg-sky-50 text-sky-700",
     },
   };
 
@@ -373,42 +404,25 @@ export function Dashboard() {
     "brand" | "success" | "warning" | "info",
     string
   > = {
-    brand: "bg-brand-50 text-brand-700 border-brand-100 group-hover:bg-brand-100",
+    brand:
+      "border-brand-100 bg-brand-50 text-brand-700 group-hover:bg-brand-100",
     success:
-      "bg-success-50 text-success-700 border-success-100 group-hover:bg-success-100",
+      "border-success-100 bg-success-50 text-success-700 group-hover:bg-success-100",
     warning:
-      "bg-warning-50 text-warning-700 border-warning-100 group-hover:bg-warning-100",
-    info: "bg-sky-50 text-sky-700 border-sky-100 group-hover:bg-sky-100",
+      "border-warning-100 bg-warning-50 text-warning-700 group-hover:bg-warning-100",
+    info: "border-sky-100 bg-sky-50 text-sky-700 group-hover:bg-sky-100",
   };
-
-  const uploadedRows: UploadedFileRow[] = useMemo(
-    () =>
-      uploadedFiles.map((file) => ({
-        id: file.id,
-        fileName: file.fileName,
-        uploadedAt: new Date(file.uploadedAt).toLocaleString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        lates: file.lateRecords.length,
-        undertime: file.generatedUndertimes.length,
-      })),
-    [uploadedFiles]
-  );
 
   const uploadedColumns: Column<UploadedFileRow>[] = [
     {
       key: "fileName",
       header: "File Name",
       render: (row) => (
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-brand-50 text-brand-700 border border-brand-100 flex-shrink-0">
-            <FileSpreadsheet className="w-4 h-4" />
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-brand-100 bg-brand-50 text-brand-700">
+            <FileSpreadsheet className="h-4 w-4" />
           </div>
-          <span className="font-medium text-slate-900 truncate">
+          <span className="truncate font-medium text-slate-900">
             {row.fileName}
           </span>
         </div>
@@ -426,9 +440,7 @@ export function Dashboard() {
       header: "Lates",
       align: "right",
       render: (row) => (
-        <span className="text-sm font-semibold text-slate-900">
-          {row.lates}
-        </span>
+        <span className="font-semibold text-slate-900">{row.lates}</span>
       ),
     },
     {
@@ -436,9 +448,7 @@ export function Dashboard() {
       header: "Undertime",
       align: "right",
       render: (row) => (
-        <span className="text-sm font-semibold text-slate-900">
-          {row.undertime}
-        </span>
+        <span className="font-semibold text-slate-900">{row.undertime}</span>
       ),
     },
     {
@@ -449,7 +459,7 @@ export function Dashboard() {
         <Button
           variant="danger"
           size="sm"
-          leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+          leftIcon={<Trash2 className="h-3.5 w-3.5" />}
           onClick={() =>
             setConfirmState({
               kind: "delete-file",
@@ -466,8 +476,8 @@ export function Dashboard() {
 
   const scopeChip = (
     <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-50 text-brand-700 border border-brand-100">
-        <CalendarRange className="w-3.5 h-3.5" />
+      <div className="flex h-7 w-7 items-center justify-center rounded-md border border-brand-100 bg-brand-50 text-brand-700">
+        <CalendarRange className="h-3.5 w-3.5" />
       </div>
       <div className="flex flex-col leading-tight">
         <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
@@ -480,6 +490,20 @@ export function Dashboard() {
     </div>
   );
 
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="HR Attendance Dashboard"
+          description="Loading attendance analytics and uploaded records."
+          endMeta={scopeChip}
+        />
+        <SkeletonStatGrid count={4} />
+        <SkeletonDashboardCard lines={6} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -490,14 +514,14 @@ export function Dashboard() {
           <>
             <Button
               variant="secondary"
-              leftIcon={<UploadCloud className="w-4 h-4" />}
+              leftIcon={<UploadCloud className="h-4 w-4" />}
               onClick={() => uploadRef.current?.open()}
             >
               Upload Attendance
             </Button>
             <Button
               variant="primary"
-              leftIcon={<Download className="w-4 h-4" />}
+              leftIcon={<Download className="h-4 w-4" />}
               onClick={handleExcelExport}
             >
               Export Excel
@@ -512,11 +536,11 @@ export function Dashboard() {
         monthOptions={monthOptions}
         dayOptions={dayOptions}
         scopeLabel={filterLabel}
-        onChangeMonth={(v) => {
-          setSelectedMonthScope(v);
+        onChangeMonth={(value) => {
+          setSelectedMonthScope(value);
           setSelectedDayScope("all");
         }}
-        onChangeDay={(v) => setSelectedDayScope(v)}
+        onChangeDay={(value) => setSelectedDayScope(value)}
         onReset={handleResetFilters}
         canReset={canResetFilters}
       />
@@ -537,19 +561,19 @@ export function Dashboard() {
                 className="group relative flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_8px_20px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
               >
                 <div
-                  className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-colors flex-shrink-0 ${quickActionTones[action.tone]}`}
+                  className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border transition-colors ${quickActionTones[action.tone]}`}
                 >
-                  <Icon className="w-5 h-5" />
+                  <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900 leading-tight">
+                  <p className="text-sm font-semibold leading-tight text-slate-900">
                     {action.label}
                   </p>
-                  <p className="mt-1 text-xs text-slate-500 leading-snug">
+                  <p className="mt-1 text-xs leading-snug text-slate-500">
                     {action.description}
                   </p>
                 </div>
-                <ArrowRight className="w-4 h-4 text-slate-300 transition-colors group-hover:text-slate-500 flex-shrink-0 mt-1" />
+                <ArrowRight className="mt-1 h-4 w-4 flex-shrink-0 text-slate-300 transition-colors group-hover:text-slate-500" />
               </button>
             );
           })}
@@ -564,9 +588,9 @@ export function Dashboard() {
         <DashboardCard
           icon={
             attentionItems.length > 0 ? (
-              <ShieldAlert className="w-4.5 h-4.5" />
+              <ShieldAlert className="h-4.5 w-4.5" />
             ) : (
-              <CheckCircle className="w-4.5 h-4.5" />
+              <CheckCircle className="h-4.5 w-4.5" />
             )
           }
           iconTone={attentionItems.length > 0 ? "warning" : "success"}
@@ -586,7 +610,7 @@ export function Dashboard() {
         >
           {attentionItems.length === 0 ? (
             <div className="flex items-center gap-3 rounded-lg border border-success-100 bg-success-50/60 px-4 py-3">
-              <CheckCircle className="w-5 h-5 text-success-700 flex-shrink-0" />
+              <CheckCircle className="h-5 w-5 flex-shrink-0 text-success-700" />
               <p className="text-sm text-success-700">
                 All clear. No urgent attendance issues for the selected scope.
               </p>
@@ -596,28 +620,29 @@ export function Dashboard() {
               {attentionItems.map((item) => {
                 const Icon = item.icon;
                 const tones = attentionToneClasses[item.tone];
+
                 return (
                   <li
                     key={item.id}
-                    className={`flex items-start gap-3 px-5 py-3.5 border-l-2 transition-colors ${tones.wrap}`}
+                    className={`flex items-start gap-3 border-l-2 px-5 py-3.5 transition-colors ${tones.wrap}`}
                   >
                     <div
-                      className={`mt-0.5 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${tones.icon}`}
+                      className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${tones.icon}`}
                     >
-                      <Icon className="w-4 h-4" />
+                      <Icon className="h-4 w-4" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-slate-900">
                         {item.title}
                       </p>
-                      <p className="text-xs text-slate-600 mt-0.5 leading-5">
+                      <p className="mt-0.5 text-xs leading-5 text-slate-600">
                         {item.description}
                       </p>
                     </div>
                     <Button
                       variant="secondary"
                       size="sm"
-                      rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
+                      rightIcon={<ArrowRight className="h-3.5 w-3.5" />}
                       onClick={item.cta.onClick}
                     >
                       {item.cta.label}
@@ -630,60 +655,48 @@ export function Dashboard() {
         </DashboardCard>
       </DashboardSection>
 
-      {isLoading ? (
-        <DashboardSection
-          eyebrow="Overview"
-          title="Key Attendance Metrics"
-          description="Loading the latest figures..."
-        >
-          <SkeletonStatGrid count={4} />
-        </DashboardSection>
-      ) : (
-        <DashboardSection
-          eyebrow="Overview"
-          title="Key Attendance Metrics"
-          description="Headline figures for the current scope."
-        >
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard
-              label="Total Employees"
-              value={activeEmployeeCount}
-              icon={Users}
-              tone="brand"
-              accent
-              hint="Active roster"
-            />
-            <StatCard
-              label="Late Records"
-              value={lateRecords.length}
-              icon={Clock}
-              tone="warning"
-              accent
-              hint="In selected scope"
-            />
-            <StatCard
-              label="Absences"
-              value={absences.length}
-              icon={UserX}
-              tone="danger"
-              accent
-              hint="In selected scope"
-            />
-            <StatCard
-              label="Memo Alerts"
-              value={memoAlerts.length}
-              icon={Bell}
-              tone="warning"
-              accent
-              hint={
-                unreadMemoCount > 0
-                  ? `${unreadMemoCount} unread`
-                  : "All reviewed"
-              }
-            />
-          </div>
-        </DashboardSection>
-      )}
+      <DashboardSection
+        eyebrow="Overview"
+        title="Key Attendance Metrics"
+        description="Headline figures for the current scope."
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="Total Employees"
+            value={activeEmployeeCount}
+            icon={Users}
+            tone="brand"
+            accent
+            hint="Active roster"
+          />
+          <StatCard
+            label="Late Records"
+            value={lateRecords.length}
+            icon={Clock}
+            tone="warning"
+            accent
+            hint="In selected scope"
+          />
+          <StatCard
+            label="Absences"
+            value={absences.length}
+            icon={UserX}
+            tone="danger"
+            accent
+            hint="In selected scope"
+          />
+          <StatCard
+            label="Memo Alerts"
+            value={memoAlerts.length}
+            icon={Bell}
+            tone="warning"
+            accent
+            hint={
+              unreadMemoCount > 0 ? `${unreadMemoCount} unread` : "All reviewed"
+            }
+          />
+        </div>
+      </DashboardSection>
 
       <DashboardSection
         eyebrow="Secondary"
@@ -723,27 +736,16 @@ export function Dashboard() {
         title="Late Activity Analysis"
         description="Top late offenders and their cumulative late minutes."
       >
-        {isLoading ? (
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-            <div className="xl:col-span-2">
-              <SkeletonDashboardCard lines={6} />
-            </div>
-            <SkeletonDashboardCard lines={4} />
-          </div>
-        ) : (
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
           <DashboardCard
             className="xl:col-span-2"
-            icon={<BarChart3 className="w-4.5 h-4.5" />}
+            icon={<BarChart3 className="h-4.5 w-4.5" />}
             iconTone="brand"
             title="Top 5 Most Frequent Lates"
             description="Employees with the most late records in the selected scope."
-            padded
             actions={
               topLates.length > 0 ? (
-                <Badge tone="neutral" icon={<TrendingUp className="w-3 h-3" />}>
-                  {lateSummary.length} tracked
-                </Badge>
+                <Badge tone="neutral">{lateSummary.length} tracked</Badge>
               ) : null
             }
           >
@@ -816,7 +818,7 @@ export function Dashboard() {
               </div>
             ) : (
               <EmptyState
-                icon={<BarChart3 className="w-6 h-6" />}
+                icon={<BarChart3 className="h-6 w-6" />}
                 title="No chart data yet"
                 description="Upload attendance files to populate this chart."
                 bordered={false}
@@ -826,7 +828,7 @@ export function Dashboard() {
           </DashboardCard>
 
           <DashboardCard
-            icon={<Users className="w-4.5 h-4.5" />}
+            icon={<Users className="h-4.5 w-4.5" />}
             iconTone="brand"
             title="Top Employees"
             description="Most lates in the current report scope."
@@ -836,14 +838,14 @@ export function Dashboard() {
                 {topLates.map((employee, index) => (
                   <li
                     key={employee.name}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5 hover:bg-slate-50 hover:border-slate-300 transition-colors"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5 transition-colors hover:border-slate-300 hover:bg-slate-50"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-7 h-7 rounded-full bg-brand-50 text-brand-700 border border-brand-100 flex items-center justify-center font-semibold text-xs flex-shrink-0">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-brand-100 bg-brand-50 text-xs font-semibold text-brand-700">
                         {index + 1}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-900 truncate">
+                        <p className="truncate text-sm font-semibold text-slate-900">
                           {employee.name}
                         </p>
                         <p className="text-[11px] text-slate-500">
@@ -864,7 +866,6 @@ export function Dashboard() {
             )}
           </DashboardCard>
         </div>
-        )}
       </DashboardSection>
 
       <DashboardSection
@@ -875,7 +876,7 @@ export function Dashboard() {
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
           <DashboardCard
             className="xl:col-span-2"
-            icon={<UploadCloud className="w-4.5 h-4.5" />}
+            icon={<UploadCloud className="h-4.5 w-4.5" />}
             iconTone="brand"
             title="Upload Attendance"
             description="Import daily biometric Excel files. Each upload is stored separately."
@@ -889,14 +890,14 @@ export function Dashboard() {
 
             {fileName && (
               <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-success-100 bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700">
-                <CheckCircle2 className="w-3.5 h-3.5" />
+                <CheckCircle2 className="h-3.5 w-3.5" />
                 {fileName} loaded
               </div>
             )}
           </DashboardCard>
 
           <DashboardCard
-            icon={<Download className="w-4.5 h-4.5" />}
+            icon={<Download className="h-4.5 w-4.5" />}
             iconTone="brand"
             title="Export Report"
             description="Generate an Excel report for the current scope."
@@ -905,7 +906,7 @@ export function Dashboard() {
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
                 Current scope
               </p>
-              <p className="mt-1 text-sm font-semibold text-slate-900 truncate">
+              <p className="mt-1 truncate text-sm font-semibold text-slate-900">
                 {filterLabel}
               </p>
             </div>
@@ -913,7 +914,7 @@ export function Dashboard() {
             <Button
               variant="primary"
               fullWidth
-              leftIcon={<FileSpreadsheet className="w-4 h-4" />}
+              leftIcon={<FileSpreadsheet className="h-4 w-4" />}
               onClick={handleExcelExport}
               className="mt-3"
             >
@@ -929,7 +930,7 @@ export function Dashboard() {
         description="Manage individual imports or clear the full history."
       >
         <DashboardCard
-          icon={<FolderOpen className="w-4.5 h-4.5" />}
+          icon={<FolderOpen className="h-4.5 w-4.5" />}
           iconTone="neutral"
           title="File History"
           description="All attendance files imported into the system."
@@ -939,7 +940,7 @@ export function Dashboard() {
               <Button
                 variant="danger"
                 size="sm"
-                leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                leftIcon={<Trash2 className="h-3.5 w-3.5" />}
                 onClick={() => setConfirmState({ kind: "clear-all" })}
               >
                 Clear All History
@@ -950,7 +951,7 @@ export function Dashboard() {
           {uploadedRows.length === 0 ? (
             <div className="px-5 pb-5">
               <EmptyState
-                icon={<FolderOpen className="w-6 h-6" />}
+                icon={<FolderOpen className="h-6 w-6" />}
                 title="No uploaded attendance files yet"
                 description="Drop an Excel file in the Upload Attendance card above to get started."
                 bordered
@@ -974,39 +975,35 @@ export function Dashboard() {
           description="Employees with 4 or more lates that need a memo review."
         >
           <DashboardCard
-            icon={<Bell className="w-4.5 h-4.5" />}
+            icon={<Bell className="h-4.5 w-4.5" />}
             iconTone="warning"
             title={`${memoAlerts.length} pending memo${
               memoAlerts.length === 1 ? "" : "s"
             }`}
             description="Review each employee and issue the appropriate memo."
-            actions={
-              <Badge tone="warning">
-                {unreadMemoCount} unread
-              </Badge>
-            }
+            actions={<Badge tone="warning">{unreadMemoCount} unread</Badge>}
             padded={false}
           >
             <ul className="divide-y divide-slate-100">
               {memoAlerts.map((alert) => (
                 <li
                   key={alert.id}
-                  className="flex items-start gap-3 px-5 py-3.5 hover:bg-slate-50/60 transition-colors"
+                  className="flex items-start gap-3 px-5 py-3.5 transition-colors hover:bg-slate-50/60"
                 >
-                  <div className="mt-0.5 w-8 h-8 rounded-full bg-warning-50 text-warning-700 border border-warning-100 flex items-center justify-center flex-shrink-0">
-                    <AlertTriangle className="w-4 h-4" />
+                  <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-warning-100 bg-warning-50 text-warning-700">
+                    <AlertTriangle className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-slate-900 truncate">
+                      <p className="truncate text-sm font-semibold text-slate-900">
                         {alert.name}
                       </p>
                       <Badge tone="danger">{alert.totalLates} lates</Badge>
                     </div>
-                    <p className="text-xs text-slate-600 mt-1 leading-5">
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
                       {alert.message}
                     </p>
-                    <p className="text-[11px] text-slate-500 mt-1">
+                    <p className="mt-1 text-[11px] text-slate-500">
                       Total late minutes: {alert.totalMinutesLate}
                     </p>
                   </div>
@@ -1015,6 +1012,246 @@ export function Dashboard() {
             </ul>
           </DashboardCard>
         </DashboardSection>
+      )}
+
+      {showPendingMemoModal && (
+        <div
+          className="ui-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowPendingMemoModal(false)}
+        >
+          <div
+            className="ui-modal-in flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-danger-100 bg-danger-50 text-danger-700">
+                  <Bell className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-slate-900">
+                    Pending Memo Reviews
+                  </h3>
+                  <p className="mt-0.5 text-xs leading-snug text-slate-500">
+                    Employees who reached the memo threshold in the selected scope.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowPendingMemoModal(false)}
+                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close pending memo reviews"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto">
+              {memoAlerts.length === 0 ? (
+                <EmptyState
+                  icon={<Bell className="h-6 w-6" />}
+                  title="No pending memo reviews"
+                  description="No employees reached the memo threshold for the selected scope."
+                  bordered={false}
+                  className="py-10"
+                />
+              ) : (
+                <DataTable
+                  columns={[
+                    {
+                      key: "name",
+                      header: "Employee",
+                      render: (row) => (
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-slate-900">
+                            {row.name}
+                          </p>
+                          <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
+                            {row.message}
+                          </p>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: "totalLates",
+                      header: "Total Lates",
+                      align: "right",
+                      render: (row) => (
+                        <Badge tone="danger">{row.totalLates}</Badge>
+                      ),
+                    },
+                    {
+                      key: "totalMinutesLate",
+                      header: "Late Minutes",
+                      align: "right",
+                      render: (row) => (
+                        <span className="tabular-nums text-sm font-semibold text-slate-900">
+                          {row.totalMinutesLate}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "status",
+                      header: "Status",
+                      render: (row) => (
+                        <Badge tone={row.isRead ? "success" : "warning"}>
+                          {row.isRead ? "Reviewed" : "Needs review"}
+                        </Badge>
+                      ),
+                    },
+                  ]}
+                  rows={memoAlerts}
+                  rowKey={(row) => row.id}
+                  dense
+                />
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-6 py-3">
+              <p className="text-xs text-slate-500">
+                {memoAlerts.length} employee
+                {memoAlerts.length === 1 ? "" : "s"} need memo review.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setShowPendingMemoModal(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  rightIcon={<ArrowRight className="h-3.5 w-3.5" />}
+                  onClick={() => {
+                    setShowPendingMemoModal(false);
+                    navigate("/lates");
+                  }}
+                >
+                  Open Late Records
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRepeatedLatesModal && (
+        <div
+          className="ui-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowRepeatedLatesModal(false)}
+        >
+          <div
+            className="ui-modal-in flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-warning-100 bg-warning-50 text-warning-700">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-slate-900">
+                    Employees with Repeated Lates
+                  </h3>
+                  <p className="mt-0.5 text-xs leading-snug text-slate-500">
+                    Employees with 3 or more late arrivals in the selected scope.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowRepeatedLatesModal(false)}
+                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close repeated lates"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto">
+              {repeatedLateOffenders.length === 0 ? (
+                <EmptyState
+                  icon={<AlertTriangle className="h-6 w-6" />}
+                  title="No repeated lates"
+                  description="No employees currently meet the 3+ late threshold for the selected scope."
+                  bordered={false}
+                  className="py-10"
+                />
+              ) : (
+                <DataTable
+                  columns={[
+                    {
+                      key: "name",
+                      header: "Employee",
+                      render: (row) => (
+                        <span className="truncate font-medium text-slate-900">
+                          {row.name}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "totalLates",
+                      header: "Total Lates",
+                      align: "right",
+                      render: (row) => (
+                        <Badge tone="warning">{row.totalLates}</Badge>
+                      ),
+                    },
+                    {
+                      key: "totalMinutesLate",
+                      header: "Late Minutes",
+                      align: "right",
+                      render: (row) => (
+                        <span className="tabular-nums text-sm font-semibold text-slate-900">
+                          {row.totalMinutesLate}
+                        </span>
+                      ),
+                    },
+                  ]}
+                  rows={repeatedLateOffenders}
+                  rowKey={(row) => row.name}
+                  dense
+                />
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-6 py-3">
+              <p className="text-xs text-slate-500">
+                {repeatedLateOffenders.length} employee
+                {repeatedLateOffenders.length === 1 ? "" : "s"} flagged.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setShowRepeatedLatesModal(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  rightIcon={<ArrowRight className="h-3.5 w-3.5" />}
+                  onClick={() => {
+                    setShowRepeatedLatesModal(false);
+                    navigate("/lates");
+                  }}
+                >
+                  Open Late Records
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       <ConfirmModal

@@ -56,7 +56,10 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-h1, h2, h3, h4 {
+h1,
+h2,
+h3,
+h4 {
   letter-spacing: -0.01em;
 }
 
@@ -103,38 +106,82 @@ select {
 /* --- Subtle motion utilities --------------------------------------------- */
 
 @keyframes ui-fade-in-up {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @keyframes ui-modal-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.985); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @keyframes ui-overlay-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes ui-toast-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @keyframes ui-shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
 }
 
 @keyframes ui-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.ui-fade-in-up   { animation: ui-fade-in-up 240ms ease-out both; }
-.ui-modal-in     { animation: ui-modal-in 180ms ease-out both; }
-.ui-overlay-in   { animation: ui-overlay-in 160ms ease-out both; }
-.ui-toast-in     { animation: ui-toast-in 200ms ease-out both; }
+/*
+  Important:
+  Do not use animation-fill-mode: both here.
+  Keeping the final transform on the page wrapper can break fixed modals.
+*/
+.ui-fade-in-up {
+  animation: ui-fade-in-up 240ms ease-out;
+}
+
+.ui-modal-in {
+  animation: ui-modal-in 180ms ease-out both;
+}
+
+.ui-overlay-in {
+  animation: ui-overlay-in 160ms ease-out both;
+}
+
+.ui-toast-in {
+  animation: ui-toast-in 200ms ease-out both;
+}
 
 .ui-skeleton {
   background-image: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%);
@@ -142,7 +189,9 @@ select {
   animation: ui-shimmer 1.4s linear infinite;
 }
 
-.ui-spin { animation: ui-spin 0.7s linear infinite; }
+.ui-spin {
+  animation: ui-spin 0.7s linear infinite;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .ui-fade-in-up,
@@ -151,6 +200,12 @@ select {
   .ui-toast-in {
     animation: none;
   }
-  .ui-skeleton { animation: none; }
-  .ui-spin { animation-duration: 1.6s; }
+
+  .ui-skeleton {
+    animation: none;
+  }
+
+  .ui-spin {
+    animation-duration: 1.6s;
+  }
 }
