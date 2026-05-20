@@ -215,7 +215,7 @@ export function EmployeeFormModal({
               ref={fullNameRef}
               label="Full Name *"
               name="fullName"
-              placeholder="Cruz, Nathaniel Philip"
+              placeholder="Dela Cruz, Juan Dela"
               value={form.fullName}
               onChange={(e) => handleChange("fullName", e.target.value)}
               required
