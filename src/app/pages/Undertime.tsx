@@ -247,7 +247,7 @@ export function Undertime() {
                 label="Employee Name"
                 value={employeeName}
                 onChange={(e) => setEmployeeName(e.target.value)}
-                placeholder="e.g. Dela Cruz, Juan"
+                placeholder="Dela Cruz, Juan"
               />
 
               <Input
