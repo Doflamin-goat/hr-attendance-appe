@@ -11,6 +11,8 @@ import ExcelJS from "exceljs";
 import { useAuth } from "./AuthContext";
 import {
   clearWorkspaceAttendanceData,
+  createDeleteBatchId,
+  deleteAbsenceRecord,
   deleteAbsencesByMonthFromDatabase,
   deleteAttendanceAdjustmentsByDates,
   deleteExemptionRecord,
@@ -18,12 +20,17 @@ import {
   deleteManualUndertimeRecord,
   deleteManualUndertimesByMonthFromDatabase,
   deleteUploadedAttendanceFile,
+  describeSupabaseError,
   loadAttendanceData,
+  loadDeletedAttendanceData,
+  removeUploadedFileBatchFromRecycleBin,
+  restoreUploadedFileBatch,
   saveAbsenceRecord,
   saveExemptionRecord,
   saveManualUndertimeRecord,
   saveMemoReads,
   saveUploadedAttendanceFile,
+  type DeletedAttendanceData,
 } from "../services/attendanceService";
 import { toast } from "../components/ui";
 
@@ -151,15 +158,28 @@ interface AttendanceState {
     message: string;
   };
   deleteUploadedFile: (fileId: string) => void;
+  deleteAbsence: (id: string) => void;
   clearAllAttendanceHistory: () => void;
   deleteAbsencesByMonth: (monthKey: string) => void;
   deleteExemptionsByMonth: (monthKey: string) => void;
   deleteManualUndertimesByMonth: (monthKey: string) => void;
-  restoreExemption: (id: string) => void;
-  restoreManualUndertime: (id: string) => void;
+  removeExemptionAdjustment: (id: string) => void;
+  removeManualUndertimeAdjustment: (id: string) => void;
   markAllMemoAlertsAsRead: () => void;
   exportFilteredWorkbook: () => Promise<{ success: boolean; message: string }>;
+
+  // Recycle Bin
+  deletedAttendanceData: DeletedAttendanceData;
+  deletedAttendanceLoading: boolean;
+  deletedAttendanceCount: number;
+  loadDeletedAttendanceData: () => Promise<void>;
+  restoreUploadedFileBatch: (fileId: string) => Promise<void>;
+  removeUploadedFileFromRecycleBin: (fileId: string) => Promise<void>;
 }
+
+const EMPTY_DELETED_ATTENDANCE: DeletedAttendanceData = {
+  uploadedFiles: [],
+};
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -289,6 +309,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   const [selectedMonthScope, setSelectedMonthScope] = useState<string>("all");
   const [selectedDayScope, setSelectedDayScope] = useState<string>("all");
   const [isStorageHydrated, setIsStorageHydrated] = useState(false);
+  const [deletedAttendanceData, setDeletedAttendanceData] =
+    useState<DeletedAttendanceData>(EMPTY_DELETED_ATTENDANCE);
+  const [deletedAttendanceLoading, setDeletedAttendanceLoading] =
+    useState(false);
 
   const applyDatabaseData = async (loadFilterState = false) => {
     if (!workspace) return;
@@ -701,7 +725,8 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
             workspace,
             file.name,
             parsedLateRecords,
-            parsedGeneratedUndertime
+            parsedGeneratedUndertime,
+            file
           );
 
           const uploadedDay =
@@ -719,13 +744,25 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
             e.target.value = "";
           }
         } catch (error) {
-          console.error("Error reading or saving Excel file:", error);
-          toast.error(
-            "Upload failed",
-            error instanceof Error
-              ? error.message
-              : "Error reading or saving Excel file. Please check the format."
-          );
+          // Supabase errors (PostgrestError, AuthError, StorageError) are
+          // plain objects, not Error instances, so `error instanceof Error`
+          // would silently fall through to a misleading "check the format"
+          // message. Log the raw object for diagnostics and surface a clear
+          // human-readable message.
+          console.error("Upload failed:", error);
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in (error as Record<string, unknown>)
+          ) {
+            console.error("Upload failed (full detail):", {
+              message: (error as { message?: string }).message,
+              code: (error as { code?: string }).code,
+              details: (error as { details?: string }).details,
+              hint: (error as { hint?: string }).hint,
+            });
+          }
+          toast.error("Upload failed", describeSupabaseError(error));
         }
       })();
     };
@@ -945,6 +982,8 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const deleteUploadedFile = (fileId: string) => {
+    const batchId = createDeleteBatchId();
+
     setUploadedFiles((prevFiles) => {
       const fileToDelete = prevFiles.find((file) => file.id === fileId);
       const updatedFiles = prevFiles.filter((file) => file.id !== fileId);
@@ -952,11 +991,14 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       setFileName(updatedFiles.length > 0 ? updatedFiles[0].fileName : "");
 
       if (workspace) {
-        void deleteUploadedAttendanceFile(fileId).catch((error) => {
+        void deleteUploadedAttendanceFile(fileId, {
+          batchId,
+          reason: "uploaded_file_deleted",
+        }).catch((error) => {
           console.error("Failed to delete uploaded file from Supabase:", error);
           toast.error(
             "Database sync failed",
-            "File was removed on screen but failed to delete from database."
+            "File was removed on screen but failed to move to Trash."
           );
         });
       }
@@ -997,20 +1039,35 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
           );
 
           if (workspace) {
-            void deleteAttendanceAdjustmentsByDates(workspace, datesToRemove).catch(
-              (error) => {
-                console.error(
-                  "Failed to delete related adjustments from Supabase:",
-                  error
-                );
-              }
-            );
+            void deleteAttendanceAdjustmentsByDates(workspace, datesToRemove, {
+              batchId,
+              reason: "uploaded_file_cascade",
+            }).catch((error) => {
+              console.error(
+                "Failed to soft-delete related adjustments in Supabase:",
+                error
+              );
+            });
           }
         }
       }
 
       return updatedFiles;
     });
+  };
+
+  const deleteAbsence = (id: string) => {
+    setAbsences((prev) => prev.filter((record) => record.id !== id));
+
+    if (workspace) {
+      void deleteAbsenceRecord(id).catch((error) => {
+        console.error("Failed to move absence to Trash:", error);
+        toast.error(
+          "Database sync failed",
+          "Absence was removed on screen but failed to move to Trash."
+        );
+      });
+    }
   };
 
   const clearAllAttendanceHistory = () => {
@@ -1064,11 +1121,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const restoreExemption = (id: string) => {
+  // Removes the exemption so the underlying late record reappears in
+  // Late Records. This is NOT a recycle-bin restore — the exemption row
+  // is moved to Trash (soft delete), where it can be restored from the
+  // Recycle Bin page.
+  const removeExemptionAdjustment = (id: string) => {
     setExemptions((prev) => prev.filter((record) => record.id !== id));
 
-    void deleteExemptionRecord(id).catch((error) => {
-      console.error("Failed to delete exemption from Supabase:", error);
+    void deleteExemptionRecord(id, {
+      reason: "exemption_removed_for_late",
+    }).catch((error) => {
+      console.error("Failed to move exemption to Trash:", error);
     });
   };
 
@@ -1086,12 +1149,66 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const restoreManualUndertime = (id: string) => {
+  // Removes the manual undertime adjustment so the underlying late
+  // record reappears in Late Records. The undertime row itself is moved
+  // to Trash (soft delete), where it can be restored from Recycle Bin.
+  const removeManualUndertimeAdjustment = (id: string) => {
     setManualUndertimes((prev) => prev.filter((record) => record.id !== id));
 
-    void deleteManualUndertimeRecord(id).catch((error) => {
-      console.error("Failed to delete manual undertime from Supabase:", error);
+    void deleteManualUndertimeRecord(id, {
+      reason: "manual_undertime_removed_for_late",
+    }).catch((error) => {
+      console.error("Failed to move manual undertime to Trash:", error);
     });
+  };
+
+  // ------------------- Recycle Bin / Trash ------------------------------
+
+  const refreshDeletedAttendanceData = async () => {
+    if (!workspace) {
+      setDeletedAttendanceData(EMPTY_DELETED_ATTENDANCE);
+      return;
+    }
+
+    setDeletedAttendanceLoading(true);
+    try {
+      const data = await loadDeletedAttendanceData(workspace);
+      setDeletedAttendanceData(data);
+    } catch (error) {
+      console.error("Failed to load Recycle Bin:", error);
+      toast.error("Could not load Recycle Bin", describeSupabaseError(error));
+    } finally {
+      setDeletedAttendanceLoading(false);
+    }
+  };
+
+  const restoreUploadedFileBatchFromTrash = async (fileId: string) => {
+    try {
+      await restoreUploadedFileBatch(fileId);
+      await applyDatabaseData(false);
+      await refreshDeletedAttendanceData();
+      toast.success(
+        "Batch restored",
+        "The uploaded file and every record that was deleted with it are active again."
+      );
+    } catch (error) {
+      console.error("Failed to restore batch:", error);
+      toast.error("Restore failed", describeSupabaseError(error));
+    }
+  };
+
+  const removeUploadedFileFromRecycleBinAction = async (fileId: string) => {
+    try {
+      await removeUploadedFileBatchFromRecycleBin(fileId);
+      await refreshDeletedAttendanceData();
+      toast.success(
+        "Removed from Recycle Bin",
+        "Hidden from the Recycle Bin. The records are retained in the database for emergency retrieval."
+      );
+    } catch (error) {
+      console.error("Failed to remove batch from Recycle Bin:", error);
+      toast.error("Remove failed", describeSupabaseError(error));
+    }
   };
 
   const markAllMemoAlertsAsRead = () => {
@@ -1720,6 +1837,8 @@ const getTeam = (name: string) => {
   }
 };
 
+  const deletedAttendanceCount = deletedAttendanceData.uploadedFiles.length;
+
   return (
     <AttendanceContext.Provider
       value={{
@@ -1746,14 +1865,23 @@ const getTeam = (name: string) => {
         addUndertime,
         convertLateToUndertime,
         deleteUploadedFile,
+        deleteAbsence,
         clearAllAttendanceHistory,
         deleteAbsencesByMonth,
         deleteExemptionsByMonth,
         deleteManualUndertimesByMonth,
-        restoreExemption,
-        restoreManualUndertime,
+        removeExemptionAdjustment,
+        removeManualUndertimeAdjustment,
         markAllMemoAlertsAsRead,
         exportFilteredWorkbook,
+
+        deletedAttendanceData,
+        deletedAttendanceLoading,
+        deletedAttendanceCount,
+        loadDeletedAttendanceData: refreshDeletedAttendanceData,
+        restoreUploadedFileBatch: restoreUploadedFileBatchFromTrash,
+        removeUploadedFileFromRecycleBin:
+          removeUploadedFileFromRecycleBinAction,
       }}
     >
       {children}

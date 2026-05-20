@@ -48,7 +48,7 @@ export function Exemptions() {
     exemptions,
     addExemption,
     deleteExemptionsByMonth,
-    restoreExemption,
+    removeExemptionAdjustment,
   } = useAttendance();
 
   const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
@@ -114,7 +114,9 @@ export function Exemptions() {
     deleteExemptionsByMonth(selectedMonth);
     setFeedback({
       type: "success",
-      message: `All exemption records for ${formatMonthLabel(selectedMonth)} were removed and restored to Late Records.`,
+      message: `All exemption records for ${formatMonthLabel(
+        selectedMonth
+      )} were moved to Trash. Their late records are back in Late Records.`,
     });
     setSelectedMonth("all");
     setConfirmDeleteMonth(false);
@@ -122,10 +124,14 @@ export function Exemptions() {
 
   const handleRestoreConfirm = () => {
     if (!restoreTarget) return;
-    restoreExemption(restoreTarget.id);
+    removeExemptionAdjustment(restoreTarget.id);
     setFeedback({
       type: "success",
-      message: `${restoreTarget.name} has been restored to Late Records.`,
+      message: `${restoreTarget.name}'s late on ${new Date(
+        restoreTarget.date
+      ).toLocaleDateString(
+        "en-US"
+      )} is back in Late Records. The exemption row was moved to Trash and can be restored from Recycle Bin.`,
     });
     setRestoreTarget(null);
   };
@@ -341,9 +347,9 @@ export function Exemptions() {
       <ConfirmModal
         open={confirmDeleteMonth}
         tone="danger"
-        title={`Delete exemptions for ${formatMonthLabel(selectedMonth)}?`}
-        description="All exemption records for this month will be removed and restored back into Late Records."
-        confirmLabel="Delete Month"
+        title={`Move exemptions for ${formatMonthLabel(selectedMonth)} to Trash?`}
+        description="The exemption rows for this month will be moved to Trash, and their underlying late records will reappear in Late Records. You can restore the exemptions later from the Recycle Bin."
+        confirmLabel="Move to Trash"
         onConfirm={handleDeleteMonth}
         onCancel={() => setConfirmDeleteMonth(false)}
       />
@@ -351,17 +357,18 @@ export function Exemptions() {
       <ConfirmModal
         open={!!restoreTarget}
         tone="warning"
-        title="Restore this exemption?"
+        title="Restore this late record?"
         description={
           restoreTarget ? (
             <>
               <span className="font-semibold">{restoreTarget.name}</span> on{" "}
               {new Date(restoreTarget.date).toLocaleDateString("en-US")} will be
-              moved back to Late Records.
+              moved back to Late Records. The exemption row will be moved to
+              Trash and can be restored from the Recycle Bin.
             </>
           ) : null
         }
-        confirmLabel="Restore"
+        confirmLabel="Restore Late"
         onConfirm={handleRestoreConfirm}
         onCancel={() => setRestoreTarget(null)}
       />

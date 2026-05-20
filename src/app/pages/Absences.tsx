@@ -98,7 +98,9 @@ export function Absences() {
     deleteAbsencesByMonth(selectedMonth);
     setFeedback({
       type: "success",
-      message: `All absence records for ${formatMonthLabel(selectedMonth)} were removed.`,
+      message: `All absence records for ${formatMonthLabel(
+        selectedMonth
+      )} were moved to Trash. You can restore them from the Recycle Bin.`,
     });
     setSelectedMonth("all");
     setConfirmDelete(false);
@@ -277,9 +279,9 @@ export function Absences() {
       <ConfirmModal
         open={confirmDelete}
         tone="danger"
-        title={`Delete absences for ${formatMonthLabel(selectedMonth)}?`}
-        description="All absence records for this month will be permanently removed."
-        confirmLabel="Delete Month"
+        title={`Move absences for ${formatMonthLabel(selectedMonth)} to Trash?`}
+        description="All absence records for this month will be moved to Trash. You can restore them later from the Recycle Bin."
+        confirmLabel="Move to Trash"
         onConfirm={handleDeleteMonth}
         onCancel={() => setConfirmDelete(false)}
       />

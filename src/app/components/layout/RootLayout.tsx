@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard,
   Clock,
@@ -14,18 +14,26 @@ import {
   Menu,
   X,
   ChevronRight,
+  Trash2,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
 import { useAttendance } from "../../context/AttendanceContext";
 import { useAuth } from "../../context/AuthContext";
 
-const navigation = [
+type NavItem = {
+  name: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+};
+
+const navigation: NavItem[] = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Employees", href: "/employees", icon: Users },
   { name: "Late Records", href: "/lates", icon: Clock },
   { name: "Exemptions", href: "/exemptions", icon: ShieldCheck },
   { name: "Absences", href: "/absences", icon: UserX },
   { name: "Undertime", href: "/undertime", icon: Timer },
+  { name: "Recycle Bin", href: "/recycle-bin", icon: Trash2 },
 ];
 
 function formatMonthLabel(monthKey: string) {
@@ -48,6 +56,7 @@ type SidebarContentProps = {
   pathname: string;
   workspace: string | null;
   email: string | null;
+  trashCount: number;
   onSignOut: () => void;
   onNavigate?: () => void;
 };
@@ -56,6 +65,7 @@ function SidebarContent({
   pathname,
   workspace,
   email,
+  trashCount,
   onSignOut,
   onNavigate,
 }: SidebarContentProps) {
@@ -84,6 +94,8 @@ function SidebarContent({
           {navigation.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
+            const showTrashBadge =
+              item.href === "/recycle-bin" && trashCount > 0;
 
             return (
               <li key={item.name}>
@@ -106,7 +118,15 @@ function SidebarContent({
                         : "text-slate-400 group-hover:text-slate-600"
                     }`}
                   />
-                  <span className="truncate">{item.name}</span>
+                  <span className="truncate flex-1">{item.name}</span>
+                  {showTrashBadge && (
+                    <span
+                      className="ml-auto inline-flex min-w-[18px] h-4 items-center justify-center rounded-full bg-slate-200 px-1.5 text-[10px] font-semibold text-slate-700"
+                      aria-label={`${trashCount} items in Trash`}
+                    >
+                      {trashCount > 99 ? "99+" : trashCount}
+                    </span>
+                  )}
                 </Link>
               </li>
             );
@@ -150,11 +170,22 @@ export function RootLayout() {
     markAllMemoAlertsAsRead,
     selectedMonthScope,
     selectedDayScope,
+    deletedAttendanceCount,
+    loadDeletedAttendanceData,
+    loading: attendanceLoading,
   } = useAttendance();
 
   const { workspace, email, signOut } = useAuth();
   const [isBellOpen, setIsBellOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
+  // Prefetch the Trash count once the active data is loaded so the
+  // sidebar badge appears without forcing the user to visit the page.
+  useEffect(() => {
+    if (attendanceLoading || !workspace) return;
+    void loadDeletedAttendanceData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attendanceLoading, workspace]);
 
   const currentScopeLabel = useMemo(() => {
     if (selectedDayScope !== "all") return formatDayLabel(selectedDayScope);
@@ -173,6 +204,7 @@ export function RootLayout() {
           pathname={location.pathname}
           workspace={workspace}
           email={email}
+          trashCount={deletedAttendanceCount}
           onSignOut={handleSignOut}
         />
       </aside>
@@ -197,6 +229,7 @@ export function RootLayout() {
               pathname={location.pathname}
               workspace={workspace}
               email={email}
+              trashCount={deletedAttendanceCount}
               onSignOut={() => {
                 setIsMobileNavOpen(false);
                 handleSignOut();

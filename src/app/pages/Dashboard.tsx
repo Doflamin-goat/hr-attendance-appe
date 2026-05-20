@@ -1257,9 +1257,9 @@ export function Dashboard() {
       <ConfirmModal
         open={confirmState?.kind === "clear-all"}
         tone="danger"
-        title="Clear all attendance history?"
-        description="This will remove every uploaded file and all related late, undertime, exemption, and absence records that depend on them."
-        confirmLabel="Clear All"
+        title="Move all attendance history to Trash?"
+        description="This will move every uploaded file and all related late, undertime, exemption, and absence records to Trash. You can restore them later from the Recycle Bin."
+        confirmLabel="Move to Trash"
         onConfirm={handleConfirm}
         onCancel={() => setConfirmState(null)}
       />
@@ -1267,17 +1267,19 @@ export function Dashboard() {
       <ConfirmModal
         open={confirmState?.kind === "delete-file"}
         tone="danger"
-        title="Delete this attendance file?"
+        title="Move this attendance file to Trash?"
         description={
           confirmState?.kind === "delete-file" ? (
             <>
               <span className="font-semibold">{confirmState.fileName}</span>{" "}
-              will be removed. Exemption, absence, and manual undertime records
-              tied to removed dates will also be cleaned.
+              and its late / undertime records will be moved to Trash.
+              Exemptions, absences, and manual undertimes tied to dates that
+              no longer have any other file coverage will be moved together
+              as a batch. You can restore everything from the Recycle Bin.
             </>
           ) : null
         }
-        confirmLabel="Delete File"
+        confirmLabel="Move to Trash"
         onConfirm={handleConfirm}
         onCancel={() => setConfirmState(null)}
       />

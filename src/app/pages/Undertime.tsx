@@ -44,7 +44,7 @@ export function Undertime() {
     manualUndertimes,
     addUndertime,
     deleteManualUndertimesByMonth,
-    restoreManualUndertime,
+    removeManualUndertimeAdjustment,
   } = useAttendance();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("manual");
@@ -127,7 +127,9 @@ export function Undertime() {
     deleteManualUndertimesByMonth(selectedMonth);
     setFeedback({
       type: "success",
-      message: `All manual undertime records for ${formatMonthLabel(selectedMonth)} were removed and restored to Late Records.`,
+      message: `All manual undertime records for ${formatMonthLabel(
+        selectedMonth
+      )} were moved to Trash. Their late records are back in Late Records.`,
     });
     setSelectedMonth("all");
     setConfirmDeleteMonth(false);
@@ -135,10 +137,14 @@ export function Undertime() {
 
   const handleRestoreConfirm = () => {
     if (!restoreTarget) return;
-    restoreManualUndertime(restoreTarget.id);
+    removeManualUndertimeAdjustment(restoreTarget.id);
     setFeedback({
       type: "success",
-      message: `${restoreTarget.name} has been restored to Late Records.`,
+      message: `${restoreTarget.name}'s late on ${new Date(
+        restoreTarget.date
+      ).toLocaleDateString(
+        "en-US"
+      )} is back in Late Records. The undertime row was moved to Trash and can be restored from Recycle Bin.`,
     });
     setRestoreTarget(null);
   };
@@ -397,9 +403,9 @@ export function Undertime() {
       <ConfirmModal
         open={confirmDeleteMonth}
         tone="danger"
-        title={`Delete manual undertime for ${formatMonthLabel(selectedMonth)}?`}
-        description="All manual undertime records for this month will be removed and restored back to Late Records."
-        confirmLabel="Delete Month"
+        title={`Move manual undertime for ${formatMonthLabel(selectedMonth)} to Trash?`}
+        description="The manual undertime rows for this month will be moved to Trash, and their underlying late records will reappear in Late Records. You can restore the undertime entries later from the Recycle Bin."
+        confirmLabel="Move to Trash"
         onConfirm={handleDeleteMonth}
         onCancel={() => setConfirmDeleteMonth(false)}
       />
@@ -407,17 +413,18 @@ export function Undertime() {
       <ConfirmModal
         open={!!restoreTarget}
         tone="warning"
-        title="Restore this undertime?"
+        title="Restore this late record?"
         description={
           restoreTarget ? (
             <>
               <span className="font-semibold">{restoreTarget.name}</span> on{" "}
               {new Date(restoreTarget.date).toLocaleDateString("en-US")} will be
-              moved back to Late Records.
+              moved back to Late Records. The manual undertime row will be
+              moved to Trash and can be restored from the Recycle Bin.
             </>
           ) : null
         }
-        confirmLabel="Restore"
+        confirmLabel="Restore Late"
         onConfirm={handleRestoreConfirm}
         onCancel={() => setRestoreTarget(null)}
       />
