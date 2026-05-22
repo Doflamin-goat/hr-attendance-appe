@@ -167,7 +167,7 @@ export function Exemptions() {
               <Input
                 label="Employee Name"
                 required
-                placeholder="e.g. Dela Cruz, Juan"
+                placeholder="Dela Cruz, Juan"
                 value={formData.name}
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })
