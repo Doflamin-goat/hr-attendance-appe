@@ -1,4 +1,4 @@
-import { supabase } from "../../lib/supabase";
+import { supabase } from "../lib/supabase";
 
 export type Workspace = "APP" | "WAIS";
 export type EmploymentStatus = "active" | "inactive";

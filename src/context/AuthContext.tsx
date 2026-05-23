@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { supabase, supabaseConfigError } from "../../lib/supabase";
+import { supabase, supabaseConfigError } from "../lib/supabase";
 
 type Workspace = "APP" | "WAIS";
 
