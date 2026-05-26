@@ -1016,7 +1016,7 @@ export function Dashboard() {
 
       {showPendingMemoModal && (
         <div
-          className="ui-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          className="ui-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           onClick={() => setShowPendingMemoModal(false)}
@@ -1143,7 +1143,7 @@ export function Dashboard() {
 
       {showRepeatedLatesModal && (
         <div
-          className="ui-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          className="ui-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           onClick={() => setShowRepeatedLatesModal(false)}

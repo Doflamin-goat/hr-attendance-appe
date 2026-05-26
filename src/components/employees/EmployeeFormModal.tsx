@@ -174,7 +174,7 @@ export function EmployeeFormModal({
   return createPortal(
     <div className="fixed inset-0 z-[90]" role="dialog" aria-modal="true">
       <div
-        className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         aria-hidden="true"
       />
 

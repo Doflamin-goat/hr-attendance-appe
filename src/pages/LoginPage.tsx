@@ -8,7 +8,8 @@ import {
   BarChart3,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { Button, Input, Select, AlertMessage } from "../components/ui";
+import { useTheme } from "../context/ThemeContext";
+import { Button, Input, Select, AlertMessage, ThemeToggle } from "../components/ui";
 
 const REMEMBER_ACCOUNT_KEY = "timecore.rememberedAccount";
 const DEFAULT_ACCOUNT = "app@attendance.local";
@@ -67,6 +68,8 @@ function writeRememberedAccount(value: string | null) {
 
 export default function LoginPage() {
   const { signIn, user, loading, configError } = useAuth();
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
   const initialRemembered = readRememberedAccount();
   const [email, setEmail] = useState(initialRemembered ?? DEFAULT_ACCOUNT);
@@ -107,8 +110,9 @@ export default function LoginPage() {
         aria-hidden="true"
         className="absolute inset-0 z-0"
         style={{
-          background:
-            "linear-gradient(135deg, #eff6ff 0%, #f8fafc 38%, #ffffff 68%, #eaf2ff 100%)",
+          background: isDark
+            ? "linear-gradient(135deg, #0b1220 0%, #111b2e 38%, #0f172a 68%, #0b1729 100%)"
+            : "linear-gradient(135deg, #eff6ff 0%, #f8fafc 38%, #ffffff 68%, #eaf2ff 100%)",
         }}
       />
 
@@ -116,8 +120,9 @@ export default function LoginPage() {
         aria-hidden="true"
         className="absolute inset-0 z-0 opacity-[0.42]"
         style={{
-          backgroundImage:
-            "linear-gradient(to right, rgba(30,41,59,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(30,41,59,0.08) 1px, transparent 1px)",
+          backgroundImage: isDark
+            ? "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)"
+            : "linear-gradient(to right, rgba(30,41,59,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(30,41,59,0.08) 1px, transparent 1px)",
           backgroundSize: "48px 48px",
           maskImage:
             "radial-gradient(ellipse at 42% 40%, rgba(0,0,0,0.95), rgba(0,0,0,0) 76%)",
@@ -130,49 +135,69 @@ export default function LoginPage() {
         aria-hidden="true"
         className="absolute inset-y-0 right-0 z-0 hidden w-[46%] lg:block"
         style={{
-          background:
-            "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(219,234,254,0.55) 42%, rgba(241,245,249,0.86) 100%)",
+          background: isDark
+            ? "linear-gradient(90deg, rgba(15,23,42,0) 0%, rgba(30,58,138,0.35) 42%, rgba(17,24,39,0.86) 100%)"
+            : "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(219,234,254,0.55) 42%, rgba(241,245,249,0.86) 100%)",
         }}
       />
 
       <div
         aria-hidden="true"
-        className="absolute right-[-80px] top-[-80px] z-0 hidden h-[720px] w-[520px] rotate-12 rounded-[4rem] border border-white/70 bg-white/35 shadow-2xl backdrop-blur-2xl lg:block"
+        className={`absolute right-[-80px] top-[-80px] z-0 hidden h-[720px] w-[520px] rotate-12 rounded-[4rem] shadow-2xl backdrop-blur-2xl lg:block ${
+          isDark
+            ? "border border-white/10 bg-white/[0.04]"
+            : "border border-white/70 bg-white/35"
+        }`}
       />
 
       <div
         aria-hidden="true"
-        className="absolute right-[120px] top-[92px] z-0 hidden h-[520px] w-[130px] rounded-[2rem] bg-white/35 blur-[1px] lg:block"
+        className={`absolute right-[120px] top-[92px] z-0 hidden h-[520px] w-[130px] rounded-[2rem] blur-[1px] lg:block ${
+          isDark ? "bg-white/[0.04]" : "bg-white/35"
+        }`}
       />
 
       <div
         aria-hidden="true"
-        className="absolute right-[300px] top-[155px] z-0 hidden h-[420px] w-[90px] rounded-[2rem] bg-blue-100/45 blur-[1px] lg:block"
+        className={`absolute right-[300px] top-[155px] z-0 hidden h-[420px] w-[90px] rounded-[2rem] blur-[1px] lg:block ${
+          isDark ? "bg-brand-500/15" : "bg-blue-100/45"
+        }`}
       />
 
       <div
         aria-hidden="true"
-        className="absolute -left-44 bottom-[-260px] z-0 h-[720px] w-[720px] rounded-full bg-blue-700/20 blur-3xl"
+        className={`absolute -left-44 bottom-[-260px] z-0 h-[720px] w-[720px] rounded-full blur-3xl ${
+          isDark ? "bg-brand-700/25" : "bg-blue-700/20"
+        }`}
       />
 
       <div
         aria-hidden="true"
-        className="absolute -right-44 top-[-240px] z-0 h-[680px] w-[680px] rounded-full bg-sky-300/30 blur-3xl"
+        className={`absolute -right-44 top-[-240px] z-0 h-[680px] w-[680px] rounded-full blur-3xl ${
+          isDark ? "bg-brand-500/15" : "bg-sky-300/30"
+        }`}
       />
 
       <div
         aria-hidden="true"
-        className="absolute left-[38%] top-[22%] z-0 h-[360px] w-[360px] rounded-full bg-slate-300/25 blur-3xl"
+        className={`absolute left-[38%] top-[22%] z-0 h-[360px] w-[360px] rounded-full blur-3xl ${
+          isDark ? "bg-slate-700/35" : "bg-slate-300/25"
+        }`}
       />
 
       <div
         aria-hidden="true"
         className="absolute inset-0 z-0"
         style={{
-          background:
-            "linear-gradient(115deg, rgba(255,255,255,0) 32%, rgba(255,255,255,0.72) 52%, rgba(255,255,255,0) 72%)",
+          background: isDark
+            ? "linear-gradient(115deg, rgba(15,23,42,0) 32%, rgba(15,23,42,0.55) 52%, rgba(15,23,42,0) 72%)"
+            : "linear-gradient(115deg, rgba(255,255,255,0) 32%, rgba(255,255,255,0.72) 52%, rgba(255,255,255,0) 72%)",
         }}
       />
+
+      <div className="absolute top-4 right-4 z-20 sm:top-6 sm:right-6">
+        <ThemeToggle />
+      </div>
 
       <main className="relative z-10 min-h-screen">
         <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[1.05fr_0.95fr]">

@@ -19,6 +19,7 @@ import {
 import { Link, Outlet, useLocation } from "react-router";
 import { useAttendance } from "../../context/AttendanceContext";
 import { useAuth } from "../../context/AuthContext";
+import { ThemeToggle } from "../ui";
 
 type NavItem = {
   name: string;
@@ -212,7 +213,7 @@ export function RootLayout() {
       {isMobileNavOpen && (
         <div className="md:hidden fixed inset-0 z-40">
           <div
-            className="absolute inset-0 bg-slate-900/50"
+            className="absolute inset-0 bg-black/50"
             onClick={() => setIsMobileNavOpen(false)}
             aria-hidden="true"
           />
@@ -264,6 +265,8 @@ export function RootLayout() {
             </div>
 
             <div className="flex items-center gap-2">
+              <ThemeToggle />
+
               <div className="relative">
                 <button
                   type="button"

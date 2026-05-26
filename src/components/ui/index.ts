@@ -24,3 +24,4 @@ export {
 } from "./Skeleton";
 export { StatusBadge, type StatusKind } from "./StatusBadge";
 export { ToastProvider, toast, type ToastTone, type ToastOptions } from "./Toast";
+export { ThemeToggle } from "./ThemeToggle";

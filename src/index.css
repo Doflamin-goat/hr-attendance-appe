@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/*
+  Dark-mode variant.
+  Activated by adding `class="dark"` to <html>.
+  Lets us use `dark:` utilities in addition to the CSS variable overrides below.
+*/
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-brand-50:  #eef4ff;
   --color-brand-100: #dbe7fe;
@@ -38,6 +45,88 @@
   --shadow-overlay: 0 20px 50px rgba(15, 23, 42, 0.18);
 }
 
+/*
+  ----------------------------------------------------------------------------
+  Dark mode token overrides.
+  ----------------------------------------------------------------------------
+  Tailwind v4 emits utility classes that read from CSS variables. Overriding
+  these variables on the `.dark` root re-skins the entire app — every
+  `bg-white`, `bg-slate-*`, `text-slate-*`, and `border-slate-*` instance —
+  without having to add `dark:` prefixes in every component.
+
+  The slate scale is inverted so the existing class semantics still hold:
+  `text-slate-900` remains the strongest foreground, `bg-slate-50` remains the
+  page background, `border-slate-200` remains a subtle divider.
+*/
+.dark {
+  /* Surfaces */
+  --color-white:      #111827;   /* card / panel surface */
+  --color-slate-50:   #0b1220;   /* page background (sunken) */
+  --color-slate-100:  #182135;   /* hover / sub-surface */
+  --color-slate-200:  #1f2a40;   /* divider / soft border */
+  --color-slate-300:  #2a3650;   /* stronger border */
+
+  /* Foreground scale (inverted) */
+  --color-slate-400:  #7c8aa6;   /* muted icon / placeholder */
+  --color-slate-500:  #9aa7c2;   /* secondary text */
+  --color-slate-600:  #c2cce0;   /* primary text muted */
+  --color-slate-700:  #d8dfee;   /* primary body text */
+  --color-slate-800:  #e6ebf5;
+  --color-slate-900:  #f1f5fa;   /* headings / strongest text */
+  --color-slate-950:  #f8fafc;
+
+  /* Brand accents — pull toward lighter tints for contrast on dark */
+  --color-brand-50:   #1a2754;   /* soft brand surface */
+  --color-brand-100:  #233371;
+  --color-brand-200:  #2c4395;
+  --color-brand-300:  #4a6ad0;
+  --color-brand-400:  #6e8df0;
+  --color-brand-500:  #6b8df7;
+  --color-brand-600:  #7ea0ff;
+  --color-brand-700:  #9bb6ff;   /* used for text on dark surfaces */
+  --color-brand-800:  #b9ccff;
+  --color-brand-900:  #d6e1ff;
+
+  /* Status surfaces — darker tinted backgrounds, lighter foregrounds */
+  --color-success-50:  #0f2e22;
+  --color-success-100: #14573d;
+  --color-success-600: #34d399;
+  --color-success-700: #6ee7b7;
+
+  --color-warning-50:  #2c1f08;
+  --color-warning-100: #4a3410;
+  --color-warning-600: #fbbf24;
+  --color-warning-700: #fcd34d;
+
+  --color-danger-50:   #2a1212;
+  --color-danger-100:  #4a1a1a;
+  --color-danger-600:  #f87171;
+  --color-danger-700:  #fca5a5;
+
+  /* Sky tint (used by Badge "info" tone) */
+  --color-sky-50:   #0f2538;
+  --color-sky-100:  #143a5a;
+  --color-sky-700:  #93c5fd;
+
+  /* Blue tints — used in login-page decoration */
+  --color-blue-100: #1e3a8a;
+  --color-blue-700: #6e8df0;
+
+  /* Semantic surface aliases */
+  --color-surface:        #111827;
+  --color-surface-muted:  #182135;
+  --color-surface-sunken: #0b1220;
+  --color-border:         #1f2a40;
+  --color-border-strong:  #2a3650;
+
+  /* Shadows: heavier in dark mode so cards stay readable */
+  --shadow-card:    0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop:     0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-overlay: 0 20px 50px rgba(0, 0, 0, 0.65);
+
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -54,6 +143,35 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+.dark body {
+  color: var(--color-slate-900);
+}
+
+/*
+  Smooth color transition for theme switching.
+  Targets only color-related properties so layout isn't animated.
+*/
+*,
+*::before,
+*::after {
+  transition-property: background-color, border-color, color, fill, stroke,
+    box-shadow;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+
+/* Don't animate transforms / opacity / spinners (avoid blocking motion utils) */
+.ui-fade-in-up,
+.ui-modal-in,
+.ui-overlay-in,
+.ui-toast-in,
+.ui-skeleton,
+.ui-spin,
+[class*="animate-"] {
+  transition-property: background-color, border-color, color, fill, stroke;
 }
 
 h1,
@@ -85,6 +203,12 @@ h4 {
   border: 2px solid transparent;
 }
 
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3b4a6b;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
@@ -101,6 +225,13 @@ textarea:focus-visible {
 
 select {
   background-image: none;
+}
+
+/* Native form controls should follow the chosen theme */
+.dark input,
+.dark select,
+.dark textarea {
+  color-scheme: dark;
 }
 
 /* --- Subtle motion utilities --------------------------------------------- */
@@ -189,6 +320,15 @@ select {
   animation: ui-shimmer 1.4s linear infinite;
 }
 
+.dark .ui-skeleton {
+  background-image: linear-gradient(
+    90deg,
+    #182135 0%,
+    #243150 50%,
+    #182135 100%
+  );
+}
+
 .ui-spin {
   animation: ui-spin 0.7s linear infinite;
 }
@@ -207,5 +347,11 @@ select {
 
   .ui-spin {
     animation-duration: 1.6s;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
   }
 }
