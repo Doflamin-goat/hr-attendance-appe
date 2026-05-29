@@ -821,8 +821,20 @@ export type DeletedUploadedFileRow = DeletedRecord<{
   storagePath: string | null;
 }>;
 
+export type DeletedManualHrType = "exemption" | "absence" | "manual_undertime";
+
+export type DeletedManualHrRow = DeletedRecord<{
+  id: string;
+  type: DeletedManualHrType;
+  name: string;
+  date: string;
+  reason: string;
+  details: string | null;
+}>;
+
 export interface DeletedAttendanceData {
   uploadedFiles: DeletedUploadedFileRow[];
+  manualHrRecords: DeletedManualHrRow[];
 }
 
 const ALL_ATTENDANCE_TABLES = [
@@ -848,7 +860,14 @@ export async function loadDeletedAttendanceData(
 ): Promise<DeletedAttendanceData> {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  const [filesResult, latesResult, undertimesResult] = await Promise.all([
+  const [
+    filesResult,
+    latesResult,
+    undertimesResult,
+    exemptionsResult,
+    absencesResult,
+    manualUndertimesResult,
+  ] = await Promise.all([
     supabase
       .from("uploaded_files")
       .select("*")
@@ -868,11 +887,35 @@ export async function loadDeletedAttendanceData(
       .eq("workspace", workspace)
       .eq("is_deleted", true)
       .eq("removed_from_recycle_bin", false),
+    supabase
+      .from("exemptions")
+      .select("*")
+      .eq("workspace", workspace)
+      .eq("is_deleted", true)
+      .eq("removed_from_recycle_bin", false)
+      .order("deleted_at", { ascending: false }),
+    supabase
+      .from("absences")
+      .select("*")
+      .eq("workspace", workspace)
+      .eq("is_deleted", true)
+      .eq("removed_from_recycle_bin", false)
+      .order("deleted_at", { ascending: false }),
+    supabase
+      .from("manual_undertimes")
+      .select("*")
+      .eq("workspace", workspace)
+      .eq("is_deleted", true)
+      .eq("removed_from_recycle_bin", false)
+      .order("deleted_at", { ascending: false }),
   ]);
 
   if (filesResult.error) throw filesResult.error;
   if (latesResult.error) throw latesResult.error;
   if (undertimesResult.error) throw undertimesResult.error;
+  if (exemptionsResult.error) throw exemptionsResult.error;
+  if (absencesResult.error) throw absencesResult.error;
+  if (manualUndertimesResult.error) throw manualUndertimesResult.error;
 
   const lateCountByFile = new Map<string, number>();
   (latesResult.data ?? []).forEach((row) => {
@@ -905,7 +948,99 @@ export async function loadDeletedAttendanceData(
     }
   );
 
-  return { uploadedFiles };
+  const manualHrRecords: DeletedManualHrRow[] = [];
+
+  (exemptionsResult.data ?? []).forEach((item) => {
+    manualHrRecords.push({
+      id: rowId(item.id),
+      type: "exemption",
+      name: item.employee_name ?? "",
+      date: toDisplayDate(item.work_date),
+      reason: item.reason ?? "",
+      details: null,
+      deletedAt: item.deleted_at ?? null,
+      deletedReason: item.deleted_reason ?? null,
+      deletedBatchId: item.deleted_batch_id ?? null,
+    });
+  });
+
+  (absencesResult.data ?? []).forEach((item) => {
+    manualHrRecords.push({
+      id: rowId(item.id),
+      type: "absence",
+      name: item.employee_name ?? "",
+      date: toDisplayDate(item.work_date),
+      reason: item.reason ?? "",
+      details: null,
+      deletedAt: item.deleted_at ?? null,
+      deletedReason: item.deleted_reason ?? null,
+      deletedBatchId: item.deleted_batch_id ?? null,
+    });
+  });
+
+  (manualUndertimesResult.data ?? []).forEach((item) => {
+    manualHrRecords.push({
+      id: rowId(item.id),
+      type: "manual_undertime",
+      name: item.employee_name ?? "",
+      date: toDisplayDate(item.work_date),
+      reason: item.reason ?? "",
+      details: item.undertime_hours ?? null,
+      deletedAt: item.deleted_at ?? null,
+      deletedReason: item.deleted_reason ?? null,
+      deletedBatchId: item.deleted_batch_id ?? null,
+    });
+  });
+
+  manualHrRecords.sort((a, b) => {
+    const aTime = a.deletedAt ? new Date(a.deletedAt).getTime() : 0;
+    const bTime = b.deletedAt ? new Date(b.deletedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  return { uploadedFiles, manualHrRecords };
+}
+
+const MANUAL_HR_TABLE_BY_TYPE: Record<DeletedManualHrType, string> = {
+  exemption: "exemptions",
+  absence: "absences",
+  manual_undertime: "manual_undertimes",
+};
+
+export async function restoreManualHrRecord(
+  type: DeletedManualHrType,
+  id: string
+) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+
+  const restoredBy = await getCurrentUserId();
+  const patch = buildRestorePatch(restoredBy);
+
+  const { error } = await supabase
+    .from(MANUAL_HR_TABLE_BY_TYPE[type])
+    .update(patch)
+    .eq("id", id)
+    .eq("is_deleted", true);
+
+  if (error) throw error;
+}
+
+export async function removeManualHrRecordFromRecycleBin(
+  type: DeletedManualHrType,
+  id: string
+) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+
+  const removedBy = await getCurrentUserId();
+  const patch = buildRemoveFromRecycleBinPatch(removedBy);
+
+  const { error } = await supabase
+    .from(MANUAL_HR_TABLE_BY_TYPE[type])
+    .update(patch)
+    .eq("id", id)
+    .eq("is_deleted", true);
+
+  if (error) throw error;
 }
 
 // ---------------------------------------------------------------------------

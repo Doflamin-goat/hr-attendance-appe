@@ -262,8 +262,8 @@ export function Dashboard() {
     if (confirmState.kind === "delete-file") {
       deleteUploadedFile(confirmState.fileId);
       toast.success(
-        "File deleted",
-        "Exemption, absence, and manual undertime records for the removed dates were also cleaned."
+        "File moved to Trash",
+        "The uploaded file and its generated attendance records were moved to Trash. Manual HR records such as exemptions, absences, and manual undertime entries were kept."
       );
     }
 
@@ -1272,10 +1272,12 @@ export function Dashboard() {
           confirmState?.kind === "delete-file" ? (
             <>
               <span className="font-semibold">{confirmState.fileName}</span>{" "}
-              and its late / undertime records will be moved to Trash.
-              Exemptions, absences, and manual undertimes tied to dates that
-              no longer have any other file coverage will be moved together
-              as a batch. You can restore everything from the Recycle Bin.
+              and only its late / undertime records generated from this file
+              will be moved to Trash. Manual HR records — exemptions,
+              absences, and manual undertime entries — will be kept and can
+              still be deleted individually from their own pages. You can
+              restore the file and its generated records from the Recycle
+              Bin.
             </>
           ) : null
         }

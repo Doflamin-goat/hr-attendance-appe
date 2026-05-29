@@ -6,6 +6,10 @@ import {
   RefreshCw,
   Layers,
   EyeOff,
+  ShieldCheck,
+  UserX,
+  Clock3,
+  ClipboardList,
 } from "lucide-react";
 import { useAttendance } from "../context/AttendanceContext";
 import {
@@ -20,12 +24,42 @@ import {
   DataTable,
   type Column,
 } from "../components/ui";
-import type { DeletedUploadedFileRow } from "../services/attendanceService";
+import type {
+  DeletedManualHrRow,
+  DeletedManualHrType,
+  DeletedUploadedFileRow,
+} from "../services/attendanceService";
 
 type PendingAction =
   | { kind: "restore"; file: DeletedUploadedFileRow }
   | { kind: "remove"; file: DeletedUploadedFileRow }
   | null;
+
+type ManualPendingAction =
+  | { kind: "restore"; record: DeletedManualHrRow }
+  | { kind: "remove"; record: DeletedManualHrRow }
+  | null;
+
+const MANUAL_TYPE_LABEL: Record<DeletedManualHrType, string> = {
+  exemption: "Exemption",
+  absence: "Absence",
+  manual_undertime: "Manual undertime",
+};
+
+const MANUAL_TYPE_TONE: Record<
+  DeletedManualHrType,
+  "brand" | "danger" | "warning"
+> = {
+  exemption: "brand",
+  absence: "danger",
+  manual_undertime: "warning",
+};
+
+function ManualTypeIcon({ type }: { type: DeletedManualHrType }) {
+  if (type === "exemption") return <ShieldCheck className="w-3.5 h-3.5" />;
+  if (type === "absence") return <UserX className="w-3.5 h-3.5" />;
+  return <Clock3 className="w-3.5 h-3.5" />;
+}
 
 function formatDeletedAt(value: string | null) {
   if (!value) return "—";
@@ -86,10 +120,14 @@ export function RecycleBin() {
     loadDeletedAttendanceData,
     restoreUploadedFileBatch,
     removeUploadedFileFromRecycleBin,
+    restoreManualHrRecord,
+    removeManualHrRecordFromRecycleBin,
   } = useAttendance();
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [manualPending, setManualPending] = useState<ManualPendingAction>(null);
+  const [manualBusyId, setManualBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     void loadDeletedAttendanceData();
@@ -117,6 +155,110 @@ export function RecycleBin() {
       setBusyId(null);
     }
   };
+
+  const handleConfirmManualRestore = async () => {
+    if (!manualPending || manualPending.kind !== "restore") return;
+    setManualBusyId(manualPending.record.id);
+    try {
+      await restoreManualHrRecord(
+        manualPending.record.type,
+        manualPending.record.id
+      );
+      setManualPending(null);
+    } finally {
+      setManualBusyId(null);
+    }
+  };
+
+  const handleConfirmManualRemove = async () => {
+    if (!manualPending || manualPending.kind !== "remove") return;
+    setManualBusyId(manualPending.record.id);
+    try {
+      await removeManualHrRecordFromRecycleBin(
+        manualPending.record.type,
+        manualPending.record.id
+      );
+      setManualPending(null);
+    } finally {
+      setManualBusyId(null);
+    }
+  };
+
+  const manualColumns: Column<DeletedManualHrRow>[] = useMemo(
+    () => [
+      {
+        key: "type",
+        header: "Type",
+        render: (row) => (
+          <Badge tone={MANUAL_TYPE_TONE[row.type]}>
+            <ManualTypeIcon type={row.type} />
+            {MANUAL_TYPE_LABEL[row.type]}
+          </Badge>
+        ),
+      },
+      {
+        key: "name",
+        header: "Employee",
+        render: (row) => (
+          <span className="font-medium text-slate-900 truncate block">
+            {row.name || "—"}
+          </span>
+        ),
+      },
+      {
+        key: "date",
+        header: "Date",
+        render: (row) => (
+          <span className="text-xs text-slate-600 tabular-nums">
+            {row.date || "—"}
+          </span>
+        ),
+      },
+      {
+        key: "deletedAt",
+        header: "Moved to Trash",
+        render: (row) => (
+          <span className="text-xs text-slate-600">
+            {formatDeletedAt(row.deletedAt)}
+          </span>
+        ),
+      },
+      {
+        key: "actions",
+        header: "Actions",
+        align: "right",
+        render: (row) => (
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
+              loading={
+                manualBusyId === row.id && manualPending?.kind === "restore"
+              }
+              disabled={manualBusyId !== null && manualBusyId !== row.id}
+              onClick={() => setManualPending({ kind: "restore", record: row })}
+            >
+              Restore
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              leftIcon={<EyeOff className="w-3.5 h-3.5" />}
+              loading={
+                manualBusyId === row.id && manualPending?.kind === "remove"
+              }
+              disabled={manualBusyId !== null && manualBusyId !== row.id}
+              onClick={() => setManualPending({ kind: "remove", record: row })}
+            >
+              Remove from Recycle Bin
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [manualBusyId, manualPending]
+  );
 
   const columns: Column<DeletedUploadedFileRow>[] = useMemo(
     () => [
@@ -190,15 +332,18 @@ export function RecycleBin() {
     [busyId, pending]
   );
 
+  const uploadedFilesCount = deletedAttendanceData.uploadedFiles.length;
+  const manualHrCount = deletedAttendanceData.manualHrRecords.length;
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Recycle Bin"
-        description="Uploaded attendance files that were moved to Trash. Restore brings the file and every related record back. Remove from Recycle Bin hides the entry from the UI but keeps the data in the database for emergency retrieval."
+        description="Records that were moved to Trash. Uploaded files are shown separately from manual HR records (exemptions, absences, manual undertime) so you can manage each independently. Remove from Recycle Bin hides the entry from the UI but keeps the data in the database for emergency retrieval."
         actions={
           <>
             <Badge tone="neutral">
-              {deletedAttendanceCount} file
+              {deletedAttendanceCount} item
               {deletedAttendanceCount === 1 ? "" : "s"} in Trash
             </Badge>
             <Button
@@ -214,22 +359,25 @@ export function RecycleBin() {
       />
 
       <Card padded={false}>
-        <div className="px-5 py-4 border-b border-slate-200">
+        <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3 flex-wrap">
           <SectionHeader
             icon={<FileSpreadsheet className="w-5 h-5" />}
             iconTone="brand"
             title="Deleted Uploaded Files"
-            description="Each restore brings back the file plus all related late records, undertimes, exemptions, absences, and manual undertimes that were deleted with it."
+            description="Restoring an uploaded file brings back the file and the late / undertime records generated from it. Manual HR records are never affected."
           />
+          <Badge tone="neutral">
+            {uploadedFilesCount} file{uploadedFilesCount === 1 ? "" : "s"}
+          </Badge>
         </div>
 
         {deletedAttendanceLoading ? (
           <SkeletonTable rows={3} columns={5} />
-        ) : deletedAttendanceData.uploadedFiles.length === 0 ? (
+        ) : uploadedFilesCount === 0 ? (
           <EmptyState
             icon={<Trash2 className="w-6 h-6" />}
-            title="Recycle Bin is empty"
-            description="Deleting an attendance file from the dashboard moves it here. You can restore the whole batch or hide it from the UI."
+            title="No uploaded files in Trash"
+            description="Deleting an attendance file from the dashboard moves it here. You can restore the file or hide it from the UI."
             bordered={false}
             className="py-10"
           />
@@ -238,6 +386,39 @@ export function RecycleBin() {
             columns={columns}
             rows={deletedAttendanceData.uploadedFiles}
             rowKey={(row) => row.id}
+            dense
+          />
+        )}
+      </Card>
+
+      <Card padded={false}>
+        <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3 flex-wrap">
+          <SectionHeader
+            icon={<ClipboardList className="w-5 h-5" />}
+            iconTone="warning"
+            title="Deleted HR Manual Records"
+            description="Exemptions, absences, and manual undertime entries that were soft-deleted. Restoring returns the row to its own page only — it does not bring back uploaded files or Late Records."
+          />
+          <Badge tone="neutral">
+            {manualHrCount} record{manualHrCount === 1 ? "" : "s"}
+          </Badge>
+        </div>
+
+        {deletedAttendanceLoading ? (
+          <SkeletonTable rows={3} columns={5} />
+        ) : manualHrCount === 0 ? (
+          <EmptyState
+            icon={<Trash2 className="w-6 h-6" />}
+            title="No manual HR records in Trash"
+            description="Deleting an Exemption, Absence, or Manual Undertime moves it here. You can restore it or hide it from the UI."
+            bordered={false}
+            className="py-10"
+          />
+        ) : (
+          <DataTable
+            columns={manualColumns}
+            rows={deletedAttendanceData.manualHrRecords}
+            rowKey={(row) => `${row.type}-${row.id}`}
             dense
           />
         )}
@@ -252,8 +433,9 @@ export function RecycleBin() {
             <>
               This will restore{" "}
               <span className="font-semibold">{pending.file.fileName}</span> and
-              all related late records, undertimes, absences, exemptions, and
-              manual undertimes connected to this delete action.
+              the late / undertime records generated from it. Manual HR records
+              (exemptions, absences, manual undertime) are not affected by this
+              restore.
             </>
           ) : null
         }
@@ -280,6 +462,64 @@ export function RecycleBin() {
         loading={busyId === pending?.file.id && pending?.kind === "remove"}
         onConfirm={handleConfirmRemove}
         onCancel={() => (busyId ? null : setPending(null))}
+      />
+
+      <ConfirmModal
+        open={manualPending?.kind === "restore"}
+        tone="primary"
+        title="Restore this HR record?"
+        description={
+          manualPending?.kind === "restore" ? (
+            <>
+              This will return the{" "}
+              <span className="font-semibold">
+                {MANUAL_TYPE_LABEL[manualPending.record.type].toLowerCase()}
+              </span>{" "}
+              for{" "}
+              <span className="font-semibold">
+                {manualPending.record.name || "this employee"}
+              </span>{" "}
+              on {manualPending.record.date} back to its page. No uploaded files
+              or Late Records will be touched.
+            </>
+          ) : null
+        }
+        confirmLabel="Restore Record"
+        loading={
+          manualBusyId === manualPending?.record.id &&
+          manualPending?.kind === "restore"
+        }
+        onConfirm={handleConfirmManualRestore}
+        onCancel={() => (manualBusyId ? null : setManualPending(null))}
+      />
+
+      <ConfirmModal
+        open={manualPending?.kind === "remove"}
+        tone="danger"
+        title="Remove this record from the Recycle Bin?"
+        description={
+          manualPending?.kind === "remove" ? (
+            <>
+              The{" "}
+              <span className="font-semibold">
+                {MANUAL_TYPE_LABEL[manualPending.record.type].toLowerCase()}
+              </span>{" "}
+              for{" "}
+              <span className="font-semibold">
+                {manualPending.record.name || "this employee"}
+              </span>{" "}
+              will no longer appear in the Recycle Bin, but the database row
+              will be retained for emergency retrieval.
+            </>
+          ) : null
+        }
+        confirmLabel="Remove from Recycle Bin"
+        loading={
+          manualBusyId === manualPending?.record.id &&
+          manualPending?.kind === "remove"
+        }
+        onConfirm={handleConfirmManualRemove}
+        onCancel={() => (manualBusyId ? null : setManualPending(null))}
       />
     </div>
   );

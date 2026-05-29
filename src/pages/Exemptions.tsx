@@ -20,6 +20,7 @@ import {
   ConfirmModal,
   SectionHeader,
   SkeletonTable,
+  toast,
 } from "../components/ui";
 
 function getSafeDate(dateValue: string) {
@@ -41,6 +42,7 @@ function formatMonthLabel(monthKey: string) {
 }
 
 type RestoreTarget = { id: string; name: string; date: string } | null;
+type DeleteTarget = { id: string; name: string; date: string } | null;
 
 export function Exemptions() {
   const {
@@ -49,6 +51,7 @@ export function Exemptions() {
     addExemption,
     deleteExemptionsByMonth,
     removeExemptionAdjustment,
+    deleteExemption,
   } = useAttendance();
 
   const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
@@ -58,6 +61,7 @@ export function Exemptions() {
   } | null>(null);
   const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
 
   const monthOptions = useMemo(() => {
     const uniqueMonths = Array.from(
@@ -134,6 +138,13 @@ export function Exemptions() {
       )} is back in Late Records. The exemption row was moved to Trash and can be restored from Recycle Bin.`,
     });
     setRestoreTarget(null);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    deleteExemption(deleteTarget.id);
+    setDeleteTarget(null);
+    toast.success("Record moved to Trash.");
   };
 
   return (
@@ -308,7 +319,7 @@ export function Exemptions() {
                               </p>
                             </div>
 
-                            <div className="flex items-center gap-2 flex-shrink-0">
+                            <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
                               <Badge tone="brand">Exempted</Badge>
                               <Button
                                 variant="warning"
@@ -323,6 +334,20 @@ export function Exemptions() {
                                 }
                               >
                                 Restore
+                              </Button>
+                              <Button
+                                variant="danger"
+                                size="sm"
+                                leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    id: record.id,
+                                    name: record.name,
+                                    date: record.date,
+                                  })
+                                }
+                              >
+                                Delete
                               </Button>
                             </div>
                           </div>
@@ -371,6 +396,16 @@ export function Exemptions() {
         confirmLabel="Restore Late"
         onConfirm={handleRestoreConfirm}
         onCancel={() => setRestoreTarget(null)}
+      />
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        tone="danger"
+        title="Move this record to Trash?"
+        description="This will only remove this selected HR record. It will not affect uploaded files, Late Records, or other HR records."
+        confirmLabel="Move to Trash"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
       />
     </div>
   );

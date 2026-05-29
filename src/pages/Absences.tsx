@@ -14,6 +14,7 @@ import {
   ConfirmModal,
   SectionHeader,
   SkeletonTable,
+  toast,
 } from "../components/ui";
 
 function getSafeDate(dateValue: string) {
@@ -34,9 +35,16 @@ function formatMonthLabel(monthKey: string) {
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
+type DeleteTarget = { id: string; name: string; date: string } | null;
+
 export function Absences() {
-  const { loading, absences, addAbsence, deleteAbsencesByMonth } =
-    useAttendance();
+  const {
+    loading,
+    absences,
+    addAbsence,
+    deleteAbsencesByMonth,
+    deleteAbsence,
+  } = useAttendance();
 
   const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
   const [feedback, setFeedback] = useState<{
@@ -44,6 +52,7 @@ export function Absences() {
     message: string;
   } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
 
   const monthOptions = useMemo(() => {
     const uniqueMonths = Array.from(
@@ -104,6 +113,13 @@ export function Absences() {
     });
     setSelectedMonth("all");
     setConfirmDelete(false);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    deleteAbsence(deleteTarget.id);
+    setDeleteTarget(null);
+    toast.success("Record moved to Trash.");
   };
 
   return (
@@ -259,7 +275,23 @@ export function Absences() {
                             )}
                           </p>
                         </div>
-                        <Badge tone="danger">Absent</Badge>
+                        <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
+                          <Badge tone="danger">Absent</Badge>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                            onClick={() =>
+                              setDeleteTarget({
+                                id: record.id,
+                                name: record.name,
+                                date: record.date,
+                              })
+                            }
+                          >
+                            Delete
+                          </Button>
+                        </div>
                       </div>
                       <p className="text-sm text-slate-700 mt-3 leading-5">
                         <span className="font-medium text-slate-900">
@@ -284,6 +316,16 @@ export function Absences() {
         confirmLabel="Move to Trash"
         onConfirm={handleDeleteMonth}
         onCancel={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        tone="danger"
+        title="Move this record to Trash?"
+        description="This will only remove this selected HR record. It will not affect uploaded files, Late Records, or other HR records."
+        confirmLabel="Move to Trash"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
       />
     </div>
   );

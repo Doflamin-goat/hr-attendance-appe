@@ -20,6 +20,7 @@ import {
   ConfirmModal,
   SectionHeader,
   SkeletonTable,
+  toast,
 } from "../components/ui";
 
 function getMonthKey(dateValue: string) {
@@ -36,6 +37,7 @@ function formatMonthLabel(monthKey: string) {
 }
 
 type RestoreTarget = { id: string; name: string; date: string } | null;
+type DeleteTarget = { id: string; name: string; date: string } | null;
 
 export function Undertime() {
   const {
@@ -45,6 +47,7 @@ export function Undertime() {
     addUndertime,
     deleteManualUndertimesByMonth,
     removeManualUndertimeAdjustment,
+    deleteManualUndertime,
   } = useAttendance();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("manual");
@@ -61,6 +64,7 @@ export function Undertime() {
   } | null>(null);
   const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
 
   const monthOptions = useMemo(() => {
     const months = new Set<string>();
@@ -147,6 +151,13 @@ export function Undertime() {
       )} is back in Late Records. The undertime row was moved to Trash and can be restored from Recycle Bin.`,
     });
     setRestoreTarget(null);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    deleteManualUndertime(deleteTarget.id);
+    setDeleteTarget(null);
+    toast.success("Record moved to Trash.");
   };
 
   return (
@@ -375,20 +386,36 @@ export function Undertime() {
                           <p className="text-sm text-slate-600 max-w-sm">
                             {record.reason}
                           </p>
-                          <Button
-                            variant="warning"
-                            size="sm"
-                            leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
-                            onClick={() =>
-                              setRestoreTarget({
-                                id: record.id,
-                                name: record.name,
-                                date: record.date,
-                              })
-                            }
-                          >
-                            Restore
-                          </Button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              variant="warning"
+                              size="sm"
+                              leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
+                              onClick={() =>
+                                setRestoreTarget({
+                                  id: record.id,
+                                  name: record.name,
+                                  date: record.date,
+                                })
+                              }
+                            >
+                              Restore
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                              onClick={() =>
+                                setDeleteTarget({
+                                  id: record.id,
+                                  name: record.name,
+                                  date: record.date,
+                                })
+                              }
+                            >
+                              Delete
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </li>
@@ -427,6 +454,16 @@ export function Undertime() {
         confirmLabel="Restore Late"
         onConfirm={handleRestoreConfirm}
         onCancel={() => setRestoreTarget(null)}
+      />
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        tone="danger"
+        title="Move this record to Trash?"
+        description="This will only remove this selected HR record. It will not affect uploaded files, Late Records, or other HR records."
+        confirmLabel="Move to Trash"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
       />
     </div>
   );

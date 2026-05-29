@@ -14,7 +14,6 @@ import {
   createDeleteBatchId,
   deleteAbsenceRecord,
   deleteAbsencesByMonthFromDatabase,
-  deleteAttendanceAdjustmentsByDates,
   deleteExemptionRecord,
   deleteExemptionsByMonthFromDatabase,
   deleteManualUndertimeRecord,
@@ -23,7 +22,9 @@ import {
   describeSupabaseError,
   loadAttendanceData,
   loadDeletedAttendanceData,
+  removeManualHrRecordFromRecycleBin,
   removeUploadedFileBatchFromRecycleBin,
+  restoreManualHrRecord,
   restoreUploadedFileBatch,
   saveAbsenceRecord,
   saveExemptionRecord,
@@ -31,6 +32,7 @@ import {
   saveMemoReads,
   saveUploadedAttendanceFile,
   type DeletedAttendanceData,
+  type DeletedManualHrType,
 } from "../services/attendanceService";
 import { toast } from "../components/ui";
 
@@ -158,7 +160,9 @@ interface AttendanceState {
     message: string;
   };
   deleteUploadedFile: (fileId: string) => void;
+  deleteExemption: (id: string) => void;
   deleteAbsence: (id: string) => void;
+  deleteManualUndertime: (id: string) => void;
   clearAllAttendanceHistory: () => void;
   deleteAbsencesByMonth: (monthKey: string) => void;
   deleteExemptionsByMonth: (monthKey: string) => void;
@@ -175,10 +179,16 @@ interface AttendanceState {
   loadDeletedAttendanceData: () => Promise<void>;
   restoreUploadedFileBatch: (fileId: string) => Promise<void>;
   removeUploadedFileFromRecycleBin: (fileId: string) => Promise<void>;
+  restoreManualHrRecord: (type: DeletedManualHrType, id: string) => Promise<void>;
+  removeManualHrRecordFromRecycleBin: (
+    type: DeletedManualHrType,
+    id: string
+  ) => Promise<void>;
 }
 
 const EMPTY_DELETED_ATTENDANCE: DeletedAttendanceData = {
   uploadedFiles: [],
+  manualHrRecords: [],
 };
 
 function createId() {
@@ -981,79 +991,34 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     };
   };
 
+  // Deleting an uploaded Excel/XLSX attendance file ONLY moves the
+  // uploaded_files row + its late_records + its generated_undertimes to
+  // Trash. Manual HR records — exemptions, absences, manual undertimes,
+  // and late-to-undertime conversions — are independent saved records and
+  // are NEVER touched by this action, regardless of whether their date
+  // still has uploaded-file coverage. Manual records have their own
+  // individual Delete buttons that soft-delete the chosen row.
   const deleteUploadedFile = (fileId: string) => {
     const batchId = createDeleteBatchId();
 
     setUploadedFiles((prevFiles) => {
-      const fileToDelete = prevFiles.find((file) => file.id === fileId);
       const updatedFiles = prevFiles.filter((file) => file.id !== fileId);
-
       setFileName(updatedFiles.length > 0 ? updatedFiles[0].fileName : "");
-
-      if (workspace) {
-        void deleteUploadedAttendanceFile(fileId, {
-          batchId,
-          reason: "uploaded_file_deleted",
-        }).catch((error) => {
-          console.error("Failed to delete uploaded file from Supabase:", error);
-          toast.error(
-            "Database sync failed",
-            "File was removed on screen but failed to move to Trash."
-          );
-        });
-      }
-
-      if (fileToDelete) {
-        const deletedDates = new Set<string>();
-
-        fileToDelete.lateRecords.forEach((record) =>
-          deletedDates.add(normalizeDate(record.date))
-        );
-        fileToDelete.generatedUndertimes.forEach((record) =>
-          deletedDates.add(normalizeDate(record.date))
-        );
-
-        const remainingDates = new Set<string>();
-        updatedFiles.forEach((file) => {
-          file.lateRecords.forEach((record) =>
-            remainingDates.add(normalizeDate(record.date))
-          );
-          file.generatedUndertimes.forEach((record) =>
-            remainingDates.add(normalizeDate(record.date))
-          );
-        });
-
-        const datesToRemove = Array.from(deletedDates).filter(
-          (dateValue) => !remainingDates.has(dateValue)
-        );
-
-        if (datesToRemove.length > 0) {
-          setExemptions((prev) =>
-            prev.filter((item) => !datesToRemove.includes(normalizeDate(item.date)))
-          );
-          setAbsences((prev) =>
-            prev.filter((item) => !datesToRemove.includes(normalizeDate(item.date)))
-          );
-          setManualUndertimes((prev) =>
-            prev.filter((item) => !datesToRemove.includes(normalizeDate(item.date)))
-          );
-
-          if (workspace) {
-            void deleteAttendanceAdjustmentsByDates(workspace, datesToRemove, {
-              batchId,
-              reason: "uploaded_file_cascade",
-            }).catch((error) => {
-              console.error(
-                "Failed to soft-delete related adjustments in Supabase:",
-                error
-              );
-            });
-          }
-        }
-      }
-
       return updatedFiles;
     });
+
+    if (workspace) {
+      void deleteUploadedAttendanceFile(fileId, {
+        batchId,
+        reason: "uploaded_file_deleted",
+      }).catch((error) => {
+        console.error("Failed to delete uploaded file from Supabase:", error);
+        toast.error(
+          "Database sync failed",
+          "File was removed on screen but failed to move to Trash."
+        );
+      });
+    }
   };
 
   const deleteAbsence = (id: string) => {
@@ -1065,6 +1030,43 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
         toast.error(
           "Database sync failed",
           "Absence was removed on screen but failed to move to Trash."
+        );
+      });
+    }
+  };
+
+  // Per-row Delete button on the Exemptions page. Soft-deletes only the
+  // selected exemption row — the underlying late record reappears in
+  // Late Records as a side effect of the adjustment count dropping.
+  const deleteExemption = (id: string) => {
+    setExemptions((prev) => prev.filter((record) => record.id !== id));
+
+    if (workspace) {
+      void deleteExemptionRecord(id, { reason: "exemption_deleted" }).catch(
+        (error) => {
+          console.error("Failed to move exemption to Trash:", error);
+          toast.error(
+            "Database sync failed",
+            "Exemption was removed on screen but failed to move to Trash."
+          );
+        }
+      );
+    }
+  };
+
+  // Per-row Delete button on the Undertime > Manual Entry page.
+  // Soft-deletes only the selected manual undertime row.
+  const deleteManualUndertime = (id: string) => {
+    setManualUndertimes((prev) => prev.filter((record) => record.id !== id));
+
+    if (workspace) {
+      void deleteManualUndertimeRecord(id, {
+        reason: "manual_undertime_deleted",
+      }).catch((error) => {
+        console.error("Failed to move manual undertime to Trash:", error);
+        toast.error(
+          "Database sync failed",
+          "Manual undertime was removed on screen but failed to move to Trash."
         );
       });
     }
@@ -1207,6 +1209,50 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       );
     } catch (error) {
       console.error("Failed to remove batch from Recycle Bin:", error);
+      toast.error("Remove failed", describeSupabaseError(error));
+    }
+  };
+
+  const TYPE_LABEL: Record<DeletedManualHrType, string> = {
+    exemption: "Exemption",
+    absence: "Absence",
+    manual_undertime: "Manual undertime",
+  };
+
+  const restoreManualHrRecordAction = async (
+    type: DeletedManualHrType,
+    id: string
+  ) => {
+    try {
+      await restoreManualHrRecord(type, id);
+      await applyDatabaseData(false);
+      await refreshDeletedAttendanceData();
+      toast.success(
+        "Record restored",
+        `${TYPE_LABEL[type]} restored from Recycle Bin.`
+      );
+    } catch (error) {
+      console.error("Failed to restore manual HR record:", error);
+      toast.error("Restore failed", describeSupabaseError(error));
+    }
+  };
+
+  const removeManualHrRecordFromRecycleBinAction = async (
+    type: DeletedManualHrType,
+    id: string
+  ) => {
+    try {
+      await removeManualHrRecordFromRecycleBin(type, id);
+      await refreshDeletedAttendanceData();
+      toast.success(
+        "Removed from Recycle Bin",
+        "Hidden from the Recycle Bin. The record is retained in the database for emergency retrieval."
+      );
+    } catch (error) {
+      console.error(
+        "Failed to remove manual HR record from Recycle Bin:",
+        error
+      );
       toast.error("Remove failed", describeSupabaseError(error));
     }
   };
@@ -1837,7 +1883,9 @@ const getTeam = (name: string) => {
   }
 };
 
-  const deletedAttendanceCount = deletedAttendanceData.uploadedFiles.length;
+  const deletedAttendanceCount =
+    deletedAttendanceData.uploadedFiles.length +
+    deletedAttendanceData.manualHrRecords.length;
 
   return (
     <AttendanceContext.Provider
@@ -1865,7 +1913,9 @@ const getTeam = (name: string) => {
         addUndertime,
         convertLateToUndertime,
         deleteUploadedFile,
+        deleteExemption,
         deleteAbsence,
+        deleteManualUndertime,
         clearAllAttendanceHistory,
         deleteAbsencesByMonth,
         deleteExemptionsByMonth,
@@ -1882,6 +1932,9 @@ const getTeam = (name: string) => {
         restoreUploadedFileBatch: restoreUploadedFileBatchFromTrash,
         removeUploadedFileFromRecycleBin:
           removeUploadedFileFromRecycleBinAction,
+        restoreManualHrRecord: restoreManualHrRecordAction,
+        removeManualHrRecordFromRecycleBin:
+          removeManualHrRecordFromRecycleBinAction,
       }}
     >
       {children}
