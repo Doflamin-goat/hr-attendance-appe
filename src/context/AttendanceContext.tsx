@@ -1290,6 +1290,7 @@ const exportFilteredWorkbook = async () => {
       "Raquem, Karl Anthony",
       "Tapat, Leilani",
       "Yatsu, Nanako",
+      "Corona Jr., Eduard",
     ];
 
 const cleanName = (name: string) =>
