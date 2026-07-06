@@ -34,8 +34,16 @@ import {
   type DeletedAttendanceData,
   type DeletedManualHrType,
 } from "../services/attendanceService";
+import {
+  addManualLateRecord,
+  loadManualLateRecords,
+  softDeleteManualLateRecord,
+} from "../services/manualLateService";
+import { computeManualLate } from "../utils/manualLate";
 import { toast } from "../components/ui";
 
+
+export type LateRecordSourceType = "excel-upload" | "manual-entry";
 
 export interface LateRecord {
   id: string;
@@ -47,6 +55,21 @@ export interface LateRecord {
   totalSecondsLate: number;
   sourceFileId: string;
   sourceFileName: string;
+  sourceType?: LateRecordSourceType;
+}
+
+export interface ManualLateRecord {
+  id: string;
+  name: string;
+  date: string;
+  timeIn: string;
+  officialStartTime: string | null;
+  graceMinutes: number;
+  minutesLate: number;
+  secondsLate: number;
+  totalSecondsLate: number;
+  reason: string | null;
+  sourceType: string;
 }
 
 export interface LateSummary {
@@ -163,6 +186,18 @@ interface AttendanceState {
   deleteExemption: (id: string) => void;
   deleteAbsence: (id: string) => void;
   deleteManualUndertime: (id: string) => void;
+
+  // Manual late records (migration 005)
+  manualLateRecords: ManualLateRecord[];
+  addManualLate: (input: {
+    name: string;
+    workDate: string;
+    timeIn: string;
+    officialStartTime: string;
+    graceMinutes: number;
+    reason: string;
+  }) => Promise<{ success: boolean; message: string }>;
+  deleteManualLate: (id: string) => void;
   clearAllAttendanceHistory: () => void;
   deleteAbsencesByMonth: (monthKey: string) => void;
   deleteExemptionsByMonth: (monthKey: string) => void;
@@ -315,6 +350,9 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   const [manualUndertimesState, setManualUndertimes] = useState<
     UndertimeRecord[]
   >([]);
+  const [manualLateRecordsState, setManualLateRecordsState] = useState<
+    ManualLateRecord[]
+  >([]);
   const [readMemoEmployeeNames, setReadMemoEmployeeNames] = useState<string[]>([]);
   const [selectedMonthScope, setSelectedMonthScope] = useState<string>("all");
   const [selectedDayScope, setSelectedDayScope] = useState<string>("all");
@@ -327,7 +365,14 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   const applyDatabaseData = async (loadFilterState = false) => {
     if (!workspace) return;
 
-    const dbData = await loadAttendanceData(workspace);
+    const [dbData, manualLates] = await Promise.all([
+      loadAttendanceData(workspace),
+      loadManualLateRecords(workspace).catch((error) => {
+        console.error("Failed to load manual late records:", error);
+        return [] as ManualLateRecord[];
+      }),
+    ]);
+
     const localData = getStoredData(storageKey);
 
     setFileName(dbData.fileName);
@@ -335,6 +380,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setExemptions(dbData.exemptions);
     setAbsences(dbData.absences);
     setManualUndertimes(dbData.manualUndertimes);
+    setManualLateRecordsState(manualLates);
     setReadMemoEmployeeNames(dbData.readMemoEmployeeNames);
 
     if (loadFilterState) {
@@ -392,9 +438,29 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     selectedDayScope,
   ]);
 
-  const allLateRecords = useMemo(() => {
-    return uploadedFiles.flatMap((file) => file.lateRecords);
-  }, [uploadedFiles]);
+  const allLateRecords = useMemo<LateRecord[]>(() => {
+    const excelLates: LateRecord[] = uploadedFiles.flatMap((file) =>
+      file.lateRecords.map((record) => ({
+        ...record,
+        sourceType: (record.sourceType ?? "excel-upload") as LateRecordSourceType,
+      }))
+    );
+
+    const manualLates: LateRecord[] = manualLateRecordsState.map((record) => ({
+      id: record.id,
+      name: record.name,
+      date: record.date,
+      timeIn: record.timeIn,
+      minutesLate: record.minutesLate,
+      secondsLate: record.secondsLate,
+      totalSecondsLate: record.totalSecondsLate,
+      sourceFileId: `manual:${record.id}`,
+      sourceFileName: "Manual Entry",
+      sourceType: "manual-entry" as LateRecordSourceType,
+    }));
+
+    return [...excelLates, ...manualLates];
+  }, [uploadedFiles, manualLateRecordsState]);
 
   const allGeneratedUndertimes = useMemo(() => {
     return uploadedFiles
@@ -1072,6 +1138,127 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // ------------------- Manual late records (migration 005) --------------
+
+  const addManualLate = async (input: {
+    name: string;
+    workDate: string;      // ISO yyyy-mm-dd from the date input
+    timeIn: string;
+    officialStartTime: string;
+    graceMinutes: number;
+    reason: string;
+  }): Promise<{ success: boolean; message: string }> => {
+    if (!workspace) {
+      return { success: false, message: "Not signed in to a workspace." };
+    }
+
+    const trimmedName = input.name.trim();
+    if (!trimmedName) {
+      return { success: false, message: "Please enter an employee name." };
+    }
+    if (!input.workDate) {
+      return { success: false, message: "Please select a date." };
+    }
+    if (!input.timeIn.trim()) {
+      return { success: false, message: "Please enter a time in." };
+    }
+    if (!input.officialStartTime.trim()) {
+      return { success: false, message: "Please enter the official start time." };
+    }
+    if (input.graceMinutes < 0) {
+      return { success: false, message: "Grace minutes cannot be negative." };
+    }
+
+    const computed = computeManualLate({
+      timeIn: input.timeIn,
+      officialStartTime: input.officialStartTime,
+      graceMinutes: input.graceMinutes,
+    });
+
+    if (!computed.normalizedTimeIn) {
+      return {
+        success: false,
+        message:
+          "Could not parse the time in. Use a format like '8:15 AM' or '08:15:00'.",
+      };
+    }
+
+    if (!computed.isLate) {
+      return {
+        success: false,
+        message: `Not late: ${computed.normalizedTimeIn} is at or before the late threshold ${computed.lateStartTime}.`,
+      };
+    }
+
+    const displayDate = normalizeDate(input.workDate);
+    const dedupeKey = makeRecordKey(
+      trimmedName,
+      displayDate,
+      computed.normalizedTimeIn
+    );
+
+    const existingDupe = allLateRecords.some(
+      (record) =>
+        makeRecordKey(record.name, record.date, record.timeIn) === dedupeKey
+    );
+    if (existingDupe) {
+      return {
+        success: false,
+        message:
+          "A late record with the same name, date, and time in already exists.",
+      };
+    }
+
+    try {
+      const saved = await addManualLateRecord({
+        workspace,
+        name: trimmedName,
+        workDate: input.workDate,
+        timeIn: computed.normalizedTimeIn,
+        officialStartTime: computed.officialStartTime,
+        graceMinutes: input.graceMinutes,
+        minutesLate: computed.minutesLate,
+        secondsLate: computed.secondsLate,
+        totalSecondsLate: computed.totalSecondsLate,
+        reason: input.reason.trim() || null,
+      });
+
+      setManualLateRecordsState((prev) => [saved, ...prev]);
+      setSelectedMonthScope(getMonthKey(displayDate));
+      setSelectedDayScope(displayDate);
+
+      return {
+        success: true,
+        message: `Manual late saved. ${trimmedName} is ${saved.minutesLate} min ${saved.secondsLate} sec late.`,
+      };
+    } catch (error) {
+      console.error("Failed to save manual late:", error);
+      return {
+        success: false,
+        message: describeSupabaseError(error),
+      };
+    }
+  };
+
+  const deleteManualLate = (id: string) => {
+    setManualLateRecordsState((prev) =>
+      prev.filter((record) => record.id !== id)
+    );
+
+    if (workspace) {
+      void softDeleteManualLateRecord(id, {
+        batchId: createDeleteBatchId(),
+        reason: "Deleted manual late record",
+      }).catch((error) => {
+        console.error("Failed to move manual late to Trash:", error);
+        toast.error(
+          "Database sync failed",
+          "Manual late was removed on screen but failed to move to Trash."
+        );
+      });
+    }
+  };
+
   const clearAllAttendanceHistory = () => {
     setFileName("");
     setUploadedFiles([]);
@@ -1217,6 +1404,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     exemption: "Exemption",
     absence: "Absence",
     manual_undertime: "Manual undertime",
+    manual_late: "Manual late",
   };
 
   const restoreManualHrRecordAction = async (
@@ -1917,6 +2105,10 @@ const getTeam = (name: string) => {
         deleteExemption,
         deleteAbsence,
         deleteManualUndertime,
+
+        manualLateRecords: manualLateRecordsState,
+        addManualLate,
+        deleteManualLate,
         clearAllAttendanceHistory,
         deleteAbsencesByMonth,
         deleteExemptionsByMonth,

@@ -821,7 +821,11 @@ export type DeletedUploadedFileRow = DeletedRecord<{
   storagePath: string | null;
 }>;
 
-export type DeletedManualHrType = "exemption" | "absence" | "manual_undertime";
+export type DeletedManualHrType =
+  | "exemption"
+  | "absence"
+  | "manual_undertime"
+  | "manual_late";
 
 export type DeletedManualHrRow = DeletedRecord<{
   id: string;
@@ -860,6 +864,15 @@ export async function loadDeletedAttendanceData(
 ): Promise<DeletedAttendanceData> {
   if (!supabase) throw new Error("Supabase is not configured.");
 
+  // Postgres 42P01 (undefined_table) — surfaces if migration 005 hasn't
+  // been applied. Fall back to an empty list so the Recycle Bin still
+  // loads for every other section.
+  const isMissingRelation = (error: { code?: string; message?: string } | null) => {
+    if (!error) return false;
+    if (error.code === "42P01" || error.code === "PGRST205") return true;
+    return /relation .* does not exist/i.test(error.message ?? "");
+  };
+
   const [
     filesResult,
     latesResult,
@@ -867,6 +880,7 @@ export async function loadDeletedAttendanceData(
     exemptionsResult,
     absencesResult,
     manualUndertimesResult,
+    manualLatesResult,
   ] = await Promise.all([
     supabase
       .from("uploaded_files")
@@ -908,6 +922,13 @@ export async function loadDeletedAttendanceData(
       .eq("is_deleted", true)
       .eq("removed_from_recycle_bin", false)
       .order("deleted_at", { ascending: false }),
+    supabase
+      .from("manual_late_records")
+      .select("*")
+      .eq("workspace", workspace)
+      .eq("is_deleted", true)
+      .eq("removed_from_recycle_bin", false)
+      .order("deleted_at", { ascending: false }),
   ]);
 
   if (filesResult.error) throw filesResult.error;
@@ -916,6 +937,9 @@ export async function loadDeletedAttendanceData(
   if (exemptionsResult.error) throw exemptionsResult.error;
   if (absencesResult.error) throw absencesResult.error;
   if (manualUndertimesResult.error) throw manualUndertimesResult.error;
+  if (manualLatesResult.error && !isMissingRelation(manualLatesResult.error)) {
+    throw manualLatesResult.error;
+  }
 
   const lateCountByFile = new Map<string, number>();
   (latesResult.data ?? []).forEach((row) => {
@@ -992,6 +1016,20 @@ export async function loadDeletedAttendanceData(
     });
   });
 
+  (manualLatesResult.data ?? []).forEach((item) => {
+    manualHrRecords.push({
+      id: rowId(item.id),
+      type: "manual_late",
+      name: item.employee_name ?? "",
+      date: toDisplayDate(item.work_date),
+      reason: item.reason ?? "",
+      details: item.time_in ?? null,
+      deletedAt: item.deleted_at ?? null,
+      deletedReason: item.deleted_reason ?? null,
+      deletedBatchId: item.deleted_batch_id ?? null,
+    });
+  });
+
   manualHrRecords.sort((a, b) => {
     const aTime = a.deletedAt ? new Date(a.deletedAt).getTime() : 0;
     const bTime = b.deletedAt ? new Date(b.deletedAt).getTime() : 0;
@@ -1005,6 +1043,7 @@ const MANUAL_HR_TABLE_BY_TYPE: Record<DeletedManualHrType, string> = {
   exemption: "exemptions",
   absence: "absences",
   manual_undertime: "manual_undertimes",
+  manual_late: "manual_late_records",
 };
 
 export async function restoreManualHrRecord(

@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   UserX,
   Clock3,
+  Clock,
   ClipboardList,
 } from "lucide-react";
 import { useAttendance } from "../context/AttendanceContext";
@@ -44,6 +45,7 @@ const MANUAL_TYPE_LABEL: Record<DeletedManualHrType, string> = {
   exemption: "Exemption",
   absence: "Absence",
   manual_undertime: "Manual undertime",
+  manual_late: "Manual late",
 };
 
 const MANUAL_TYPE_TONE: Record<
@@ -53,11 +55,13 @@ const MANUAL_TYPE_TONE: Record<
   exemption: "brand",
   absence: "danger",
   manual_undertime: "warning",
+  manual_late: "warning",
 };
 
 function ManualTypeIcon({ type }: { type: DeletedManualHrType }) {
   if (type === "exemption") return <ShieldCheck className="w-3.5 h-3.5" />;
   if (type === "absence") return <UserX className="w-3.5 h-3.5" />;
+  if (type === "manual_late") return <Clock className="w-3.5 h-3.5" />;
   return <Clock3 className="w-3.5 h-3.5" />;
 }
 
