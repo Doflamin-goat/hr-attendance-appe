@@ -1,7 +1,9 @@
 import { supabase } from "../lib/supabase";
+import { formatOptionalReportedTime } from "../utils/exemptionForms";
 import type {
   AbsentRecord,
   Exemption,
+  GeneratedHalfDay,
   GeneratedUndertime,
   LateRecord,
   UndertimeRecord,
@@ -14,6 +16,24 @@ const ATTENDANCE_STORAGE_BUCKET = "attendance-files";
 
 function rowId(value: unknown) {
   return String(value ?? "");
+}
+
+function normalizeTextList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+  if (typeof value !== "string" || !value.trim()) return [];
+  const trimmed = value.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return normalizeTextList(parsed);
+    } catch {
+      // Fall through to the legacy text representation.
+    }
+  }
+  const unwrapped = trimmed.startsWith("{") && trimmed.endsWith("}") ? trimmed.slice(1, -1) : trimmed;
+  return unwrapped.split(",").map((item) => item.trim().replace(/^"|"$/g, "")).filter(Boolean);
 }
 
 function toDisplayDate(value: string) {
@@ -272,6 +292,9 @@ export async function loadAttendanceData(workspace: Workspace) {
       totalSecondsLate: record.total_seconds_late ?? 0,
       sourceFileId,
       sourceFileName: record.source_file_name ?? "",
+      workspace: record.workspace ?? undefined,
+      isDeleted: record.is_deleted === true,
+      workDate: record.work_date ?? undefined,
     };
 
     const file = fileMap.get(sourceFileId);
@@ -291,6 +314,7 @@ export async function loadAttendanceData(workspace: Workspace) {
       timeIn: record.time_in ?? "",
       sourceFileId,
       sourceFileName: record.source_file_name ?? "",
+      minutesUndertime: record.minutes_undertime ?? undefined,
     };
 
     const file = fileMap.get(sourceFileId);
@@ -311,13 +335,25 @@ export async function loadAttendanceData(workspace: Workspace) {
         new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
     );
 
-  const exemptions: Exemption[] = (exemptionsResult.data ?? []).map((item) => ({
+  const exemptions: Exemption[] = (exemptionsResult.data ?? []).map((item) => {
+    const linkedLate = (lateRecordsResult.data ?? []).find((late) => rowId(late.id) === rowId(item.late_record_id));
+    return ({
     id: rowId(item.id),
     name: item.employee_name,
     date: toDisplayDate(item.work_date),
     reason: item.reason,
-    minutesLate: item.minutes_late ?? undefined,
-  }));
+    minutesLate: linkedLate?.minutes_late ?? item.minutes_late ?? undefined,
+    lateTime: linkedLate?.time_in ?? undefined,
+    time: formatOptionalReportedTime(item.reported_time),
+    informed: normalizeTextList(item.informed_parties),
+    approvalStatus: item.approval_status ?? "pending",
+    lateRecordId: item.late_record_id == null ? undefined : rowId(item.late_record_id),
+    reviewedBy: item.reviewed_by ?? undefined,
+    reviewedAt: item.reviewed_at ?? undefined,
+    reviewRemarks: item.review_remarks ?? undefined,
+    lateRestoredAt: item.late_restored_at ?? undefined,
+    lateRestoredBy: item.late_restored_by ?? undefined,
+  }); });
 
   const absences: AbsentRecord[] = (absencesResult.data ?? []).map((item) => ({
     id: rowId(item.id),
@@ -338,6 +374,7 @@ export async function loadAttendanceData(workspace: Workspace) {
     originalTimeIn: item.original_time_in ?? undefined,
     sourceType: item.source_type ?? undefined,
     isManualOverride: item.is_manual_override ?? false,
+    informed: normalizeTextList(item.informed_to),
   }));
 
   const readMemoEmployeeNames = (memoReadsResult.data ?? []).map(
@@ -366,7 +403,7 @@ async function tryUploadOriginalFile(
   if (!supabase || !file) return null;
 
   try {
-    const safeName = fileName.replace(/[^\w.\-]+/g, "_");
+    const safeName = fileName.replace(/[^\w.-]+/g, "_");
     const path = `${workspace}/${Date.now()}-${safeName}`;
 
     const { error } = await supabase.storage
@@ -413,6 +450,7 @@ export async function saveUploadedAttendanceFile(
   fileName: string,
   lateRecords: LateRecord[],
   generatedUndertimes: GeneratedUndertime[],
+  generatedHalfDays: GeneratedHalfDay[],
   originalFile?: File | null
 ) {
   if (!supabase) {
@@ -462,6 +500,7 @@ export async function saveUploadedAttendanceFile(
     time_in: record.timeIn,
     source_file_id: sourceFileId,
     source_file_name: fileName,
+    minutes_undertime: record.minutesUndertime ?? null,
   }));
 
   if (lateRows.length > 0) {
@@ -474,6 +513,18 @@ export async function saveUploadedAttendanceFile(
       .from("generated_undertimes")
       .insert(undertimeRows);
 
+    if (error) throw error;
+  }
+
+  for (const record of generatedHalfDays) {
+    const { error } = await supabase.rpc("create_generated_half_day", {
+      p_workspace: workspace,
+      p_employee_name: record.name,
+      p_date: toDbDate(record.date),
+      p_period: record.period,
+      p_reason: record.reason,
+      p_source_file_name: record.sourceFileName,
+    });
     if (error) throw error;
   }
 
@@ -525,16 +576,127 @@ export async function deleteUploadedAttendanceFile(
 }
 
 export async function saveExemptionRecord(workspace: Workspace, exemption: Exemption) {
+  void workspace;
+  void exemption;
+  throw new Error("Direct exemption inserts are not allowed. Use submitLinkedExemption.");
+}
+
+export async function loadCrossWorkspaceExemptionWorkflowData(): Promise<{
+  lateRecords: LateRecord[];
+  exemptions: Exemption[];
+}> {
   if (!supabase) throw new Error("Supabase is not configured.");
+  const [lateResult, exemptionResult] = await Promise.all([
+    supabase.from("late_records").select("id, workspace, employee_name, work_date, time_in, minutes_late, seconds_late, total_seconds_late, source_file_id, source_file_name, is_deleted").eq("is_deleted", false),
+    supabase.from("exemptions").select("id, workspace, employee_name, work_date, reason, minutes_late, reported_time, informed_parties, approval_status, late_record_id, reviewed_by, reviewed_at, review_remarks, late_restored_at, late_restored_by, is_deleted").eq("is_deleted", false),
+  ]);
+  if (lateResult.error) throw lateResult.error;
+  if (exemptionResult.error) throw exemptionResult.error;
+  return {
+    lateRecords: (lateResult.data ?? []).map((record) => ({
+      id: rowId(record.id), name: record.employee_name, date: toDisplayDate(record.work_date), workDate: record.work_date ?? undefined, timeIn: record.time_in ?? "", minutesLate: record.minutes_late ?? 0, secondsLate: record.seconds_late ?? 0, totalSecondsLate: record.total_seconds_late ?? 0, sourceFileId: rowId(record.source_file_id), sourceFileName: record.source_file_name ?? "", sourceType: "excel-upload" as const, workspace: record.workspace as Workspace, isDeleted: record.is_deleted === true,
+    })),
+    exemptions: (exemptionResult.data ?? []).map((item) => {
+      const linkedLate = (lateResult.data ?? []).find((late) => rowId(late.id) === rowId(item.late_record_id));
+      return { id: rowId(item.id), name: item.employee_name, date: toDisplayDate(item.work_date), reason: item.reason,
+        minutesLate: linkedLate?.minutes_late ?? item.minutes_late ?? undefined, lateTime: linkedLate?.time_in ?? undefined,
+        time: formatOptionalReportedTime(item.reported_time), informed: normalizeTextList(item.informed_parties), approvalStatus: item.approval_status ?? "pending",
+        lateRecordId: item.late_record_id == null ? undefined : rowId(item.late_record_id), reviewedBy: item.reviewed_by ?? undefined,
+        reviewedAt: item.reviewed_at ?? undefined, reviewRemarks: item.review_remarks ?? undefined,
+        lateRestoredAt: item.late_restored_at ?? undefined, lateRestoredBy: item.late_restored_by ?? undefined };
+    }),
+  };
+}
 
-  const { error } = await supabase.from("exemptions").insert({
-    workspace,
-    employee_name: exemption.name,
-    work_date: toDbDate(exemption.date),
-    reason: exemption.reason,
-    minutes_late: exemption.minutesLate ?? null,
-  });
+/** Staging migration 006 integration points. UI keeps an honest pending state until these RPCs exist. */
+export type StagedExemptionId = number;
+export type StagedLateRecordId = number;
 
+export async function submitLinkedExemption(input: { employeeId: string; lateRecordId: StagedLateRecordId; reason: string; reportedTime?: string; informedParties: string[] }): Promise<StagedExemptionId> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("submit_exemption", { p_employee_id: input.employeeId, p_late_record_id: input.lateRecordId, p_reason: input.reason, p_reported_time: input.reportedTime || null, p_informed: input.informedParties });
+  if (error) throw error;
+  return Number(data);
+}
+
+export async function reviewStagedExemption(id: StagedExemptionId, status: "approved" | "declined", remarks = "") {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("review_exemption", { p_id: id, p_status: status, p_remarks: remarks || null });
+  if (error) throw error;
+}
+
+export function describeReviewExemptionError(error: unknown): string {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  const code = typeof candidate?.code === "string" ? candidate.code : "";
+  const message = typeof candidate?.message === "string" ? candidate.message.toLowerCase() : "";
+
+  if (code === "23514" || message.includes("approval_status") || message.includes("check constraint")) {
+    return "Decline is blocked by the current database status rule. The approved decline-status correction must be applied before trying again.";
+  }
+
+  if (code === "PGRST202" || code === "42883" || message.includes("could not find the function")) {
+    return "The approval service is unavailable or has a different database contract. Ask an administrator to verify the review service deployment.";
+  }
+  if (message.includes("only admin") || message.includes("permission")) {
+    return "This review is restricted to an Admin account.";
+  }
+  if (message.includes("self-approval")) {
+    return "The person who submitted an exemption cannot review it.";
+  }
+  if (message.includes("linked late") || message.includes("linked late record")) {
+    return "This exemption needs an exact linked late record before it can be reviewed.";
+  }
+  if (message.includes("pending") || message.includes("not found")) {
+    return "This exemption is no longer pending. Refresh the page and try again.";
+  }
+  return "The review could not be saved. Refresh the page; if it continues, ask an administrator to verify the approval service.";
+}
+
+export async function createStagedHalfDay(input: { employeeId: string; date: string; period: "morning" | "afternoon"; reason: string }) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("create_half_day", { p_employee_id: input.employeeId, p_date: input.date, p_period: input.period, p_reason: input.reason });
+  if (error) throw error;
+  return String(data);
+}
+
+export type StagedHalfDayRecord = {
+  id: string;
+  employeeId: string;
+  workDate: string;
+  absentPeriod: "morning" | "afternoon";
+  scheduledStart: string;
+  scheduledEnd: string;
+  reason: string;
+};
+
+export async function restoreApprovedExemptionLate(id: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("restore_exemption_late", { p_id: Number(id) });
+  if (error) throw error;
+}
+
+export async function loadStagedHalfDays(): Promise<StagedHalfDayRecord[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase
+    .from("half_day_records")
+    .select("id, employee_id, work_date, absent_period, scheduled_start, scheduled_end, reason")
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((item) => ({
+    id: String(item.id),
+    employeeId: String(item.employee_id),
+    workDate: String(item.work_date),
+    absentPeriod: item.absent_period as "morning" | "afternoon",
+    scheduledStart: String(item.scheduled_start),
+    scheduledEnd: String(item.scheduled_end),
+    reason: String(item.reason),
+  }));
+}
+
+export async function deleteStagedHalfDay(id: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("delete_half_day", { p_id: id });
   if (error) throw error;
 }
 
@@ -567,6 +729,7 @@ export async function saveManualUndertimeRecord(
     original_time_in: undertime.originalTimeIn ?? null,
     source_type: undertime.sourceType ?? null,
     is_manual_override: undertime.isManualOverride ?? false,
+    informed_to: undertime.informed ?? [],
   });
 
   if (error) throw error;
@@ -825,7 +988,8 @@ export type DeletedManualHrType =
   | "exemption"
   | "absence"
   | "manual_undertime"
-  | "manual_late";
+  | "manual_late"
+  | "half_day";
 
 export type DeletedManualHrRow = DeletedRecord<{
   id: string;
@@ -881,6 +1045,7 @@ export async function loadDeletedAttendanceData(
     absencesResult,
     manualUndertimesResult,
     manualLatesResult,
+    halfDaysResult,
   ] = await Promise.all([
     supabase
       .from("uploaded_files")
@@ -929,6 +1094,12 @@ export async function loadDeletedAttendanceData(
       .eq("is_deleted", true)
       .eq("removed_from_recycle_bin", false)
       .order("deleted_at", { ascending: false }),
+    supabase
+      .from("half_day_records")
+      .select("*")
+      .eq("is_deleted", true)
+      .eq("removed_from_recycle_bin", false)
+      .order("deleted_at", { ascending: false }),
   ]);
 
   if (filesResult.error) throw filesResult.error;
@@ -940,6 +1111,7 @@ export async function loadDeletedAttendanceData(
   if (manualLatesResult.error && !isMissingRelation(manualLatesResult.error)) {
     throw manualLatesResult.error;
   }
+  if (halfDaysResult.error) throw halfDaysResult.error;
 
   const lateCountByFile = new Map<string, number>();
   (latesResult.data ?? []).forEach((row) => {
@@ -1030,6 +1202,20 @@ export async function loadDeletedAttendanceData(
     });
   });
 
+  (halfDaysResult.data ?? []).forEach((item) => {
+    manualHrRecords.push({
+      id: rowId(item.id),
+      type: "half_day",
+      name: item.employee_name ?? "Employee",
+      date: toDisplayDate(item.work_date),
+      reason: item.reason ?? "",
+      details: `${item.scheduled_start ?? ""}–${item.scheduled_end ?? ""}`,
+      deletedAt: item.deleted_at ?? null,
+      deletedReason: item.deleted_reason ?? null,
+      deletedBatchId: item.deleted_batch_id ?? null,
+    });
+  });
+
   manualHrRecords.sort((a, b) => {
     const aTime = a.deletedAt ? new Date(a.deletedAt).getTime() : 0;
     const bTime = b.deletedAt ? new Date(b.deletedAt).getTime() : 0;
@@ -1044,6 +1230,7 @@ const MANUAL_HR_TABLE_BY_TYPE: Record<DeletedManualHrType, string> = {
   absence: "absences",
   manual_undertime: "manual_undertimes",
   manual_late: "manual_late_records",
+  half_day: "half_day_records",
 };
 
 export async function restoreManualHrRecord(
@@ -1051,6 +1238,12 @@ export async function restoreManualHrRecord(
   id: string
 ) {
   if (!supabase) throw new Error("Supabase is not configured.");
+
+  if (type === "half_day") {
+    const { error } = await supabase.rpc("restore_half_day", { p_id: id });
+    if (error) throw error;
+    return;
+  }
 
   const restoredBy = await getCurrentUserId();
   const patch = buildRestorePatch(restoredBy);
@@ -1069,6 +1262,12 @@ export async function removeManualHrRecordFromRecycleBin(
   id: string
 ) {
   if (!supabase) throw new Error("Supabase is not configured.");
+
+  if (type === "half_day") {
+    const { error } = await supabase.rpc("hide_half_day_from_recycle_bin", { p_id: id });
+    if (error) throw error;
+    return;
+  }
 
   const removedBy = await getCurrentUserId();
   const patch = buildRemoveFromRecycleBinPatch(removedBy);

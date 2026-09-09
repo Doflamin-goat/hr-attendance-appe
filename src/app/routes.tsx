@@ -7,6 +7,8 @@ import { Exemptions } from "../pages/Exemptions";
 import { Absences } from "../pages/Absences";
 import { Undertime } from "../pages/Undertime";
 import { RecycleBin } from "../pages/RecycleBin";
+import { HalfDay } from "../pages/HalfDay";
+import { AdminApprovals } from "../pages/AdminApprovals";
 import EmployeesPage from "../pages/EmployeesPage";
 import LoginPage from "../pages/LoginPage";
 
@@ -24,12 +26,14 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, Component: Dashboard },
-      { path: "employees", Component: EmployeesPage },
-      { path: "lates", Component: LateRecords },
-      { path: "exemptions", Component: Exemptions },
-      { path: "absences", Component: Absences },
-      { path: "undertime", Component: Undertime },
-      { path: "recycle-bin", Component: RecycleBin },
+      { path: "employees", element: <ProtectedRoute allowedRoles={["Admin", "HR"]}><EmployeesPage /></ProtectedRoute> },
+      { path: "lates", element: <ProtectedRoute allowedRoles={["HR"]}><LateRecords /></ProtectedRoute> },
+      { path: "exemptions", element: <ProtectedRoute allowedRoles={["HR"]}><Exemptions /></ProtectedRoute> },
+      { path: "absences", element: <ProtectedRoute allowedRoles={["HR"]}><Absences /></ProtectedRoute> },
+      { path: "undertime", element: <ProtectedRoute allowedRoles={["HR"]}><Undertime /></ProtectedRoute> },
+      { path: "half-day", element: <ProtectedRoute allowedRoles={["HR"]}><HalfDay /></ProtectedRoute> },
+      { path: "recycle-bin", element: <ProtectedRoute allowedRoles={["HR"]}><RecycleBin /></ProtectedRoute> },
+      { path: "approvals", element: <ProtectedRoute allowedRoles={["Admin"]}><AdminApprovals /></ProtectedRoute> },
     ],
   },
 ]);

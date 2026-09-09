@@ -11,6 +11,7 @@ import {
   Clock3,
   Clock,
   ClipboardList,
+  CalendarDays,
 } from "lucide-react";
 import { useAttendance } from "../context/AttendanceContext";
 import {
@@ -46,6 +47,7 @@ const MANUAL_TYPE_LABEL: Record<DeletedManualHrType, string> = {
   absence: "Absence",
   manual_undertime: "Manual undertime",
   manual_late: "Manual late",
+  half_day: "Half-day",
 };
 
 const MANUAL_TYPE_TONE: Record<
@@ -56,12 +58,14 @@ const MANUAL_TYPE_TONE: Record<
   absence: "danger",
   manual_undertime: "warning",
   manual_late: "warning",
+  half_day: "brand",
 };
 
 function ManualTypeIcon({ type }: { type: DeletedManualHrType }) {
   if (type === "exemption") return <ShieldCheck className="w-3.5 h-3.5" />;
   if (type === "absence") return <UserX className="w-3.5 h-3.5" />;
   if (type === "manual_late") return <Clock className="w-3.5 h-3.5" />;
+  if (type === "half_day") return <CalendarDays className="w-3.5 h-3.5" />;
   return <Clock3 className="w-3.5 h-3.5" />;
 }
 
@@ -90,6 +94,7 @@ const REASON_LABELS: Record<string, string> = {
   manual_undertime_deleted: "Manual undertime deleted",
   manual_undertime_removed_for_late: "Manual undertime removed (late restored)",
   absence_deleted: "Absence deleted",
+  half_day_deleted: "Half-day deleted",
 };
 
 function readableReason(reason: string | null): string {

@@ -1,0 +1,91 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HR Attendance System — Manual QA Checklist</title>
+<style>
+:root{font-family:Inter,Segoe UI,Arial,sans-serif;color:#172033;background:#f1f5f9}body{margin:0}.wrap{max-width:1100px;margin:auto;padding:28px 18px 60px}h1{margin:0;font-size:28px}h2{margin:34px 0 12px;font-size:21px}p{line-height:1.5;color:#475569}.toolbar{position:sticky;top:0;z-index:3;background:#f1f5f9ee;backdrop-filter:blur(8px);padding:16px 0;display:flex;gap:10px;flex-wrap:wrap}.toolbar button{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;background:#1d4ed8;color:white}.toolbar button.secondary{background:#e2e8f0;color:#172033}.progress{font-weight:700;color:#334155;margin-left:auto;align-self:center}.section{border:1px solid #dbe4ef;border-radius:14px;background:#fff;padding:16px;margin-top:14px}.test{border-top:1px solid #e5e7eb;padding:16px 0}.test:first-child{border-top:0;padding-top:0}.id{font-size:12px;font-weight:800;color:#1d4ed8}.title{font-size:16px;font-weight:750;margin:4px 0}.meta{display:grid;grid-template-columns:1fr 1fr;gap:14px}.label{font-size:12px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em}.value{font-size:14px;color:#334155;white-space:pre-line}.choices{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.choice{border:1px solid #cbd5e1;border-radius:8px;padding:7px 10px;background:#fff;cursor:pointer;font-weight:700;font-size:13px}.choice:has(input:checked){border-color:#1d4ed8;background:#eff6ff;color:#1d4ed8}.choice.fail:has(input:checked){border-color:#dc2626;background:#fef2f2;color:#b91c1c}.choice.nt:has(input:checked){border-color:#d97706;background:#fffbeb;color:#b45309}textarea{box-sizing:border-box;width:100%;min-height:54px;margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:9px;font:inherit;font-size:13px}.cleanup{background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px;color:#7c2d12}.checklist li{margin:8px 0}.checklist input{width:17px;height:17px;vertical-align:middle;margin-right:8px}@media(max-width:650px){.meta{grid-template-columns:1fr}.progress{margin-left:0;width:100%}}
+</style>
+</head>
+<body><main class="wrap"><h1>HR Attendance System — Manual QA Checklist</h1><p>Choose Pass, Fail, or Not Tested for every item. Add a note or screenshot link for failures. Use <strong>Copy Report</strong> when finished, then paste it back into this chat.</p><div class="toolbar"><button onclick="copyReport()">Copy Report</button><button class="secondary" onclick="clearResults()">Clear Results</button><span id="progress" class="progress"></span></div><div id="tests"></div><h2>Final Publish Checklist</h2><section class="section checklist" id="publish"></section><h2>Defect Report Template</h2><section class="section"><pre style="white-space:pre-wrap;font:inherit;color:#334155">Title:
+Date and time:
+Tester:
+Environment: Local / Staging / Production
+Account used: APP HR / WAIS HR / APP ADMIN / WAIS ADMIN
+Test ID:
+Steps to reproduce:
+Expected result:
+Actual result:
+Frequency: Always / Sometimes / Once
+Severity: Critical / High / Medium / Low
+Screenshot or screen recording:
+Relevant employee/date/record ID:
+Cleanup needed:
+Additional notes:</pre></section></main>
+<script>
+const sections=[
+ {name:'1. Safe tests — no live data', tests:[
+ ['S-01','Login choices','Open the login page.','Only APP HR, APP ADMIN, WAIS HR, and WAIS ADMIN appear. No email address appears.'],
+ ['S-02','HR sign-in','Sign in separately as APP HR and WAIS HR.','Each account reaches the HR menu: Dashboard, Employees, Late Records, Exemptions, Absences, Undertime, Half-Day, and Recycle Bin. Approvals is absent.'],
+ ['S-03','Admin sign-in','Sign in separately as APP ADMIN and WAIS ADMIN.','Each account reaches Dashboard, read-only Employees, and Approvals only.'],
+ ['S-04','Bad password','Try an incorrect password.','A clear sign-in error appears. The password is never shown or remembered.'],
+ ['S-05','HR direct-route restriction','As HR, type /approvals in the browser address bar.','Approvals is blocked and Dashboard opens instead.'],
+ ['S-06','Admin direct-route restriction','As Admin, type /lates, /exemptions, /absences, /undertime, /half-day, and /recycle-bin.','Every HR-only page is blocked and Dashboard opens instead.'],
+ ['S-07','Admin read-only Employees','As Admin, open Employees.','Employee list, Refresh, Master List, All, and Active are visible. Add, edit, deactivate, restore, delete, upload, export, and management controls are absent.'],
+ ['S-08','HR cross-workspace employee visibility','As HR, use Employees and employee fields to look up a known APP employee and a known WAIS employee.','Both active APP and WAIS employees can be found and selected.'],
+ ['S-09','Admin Dashboard scope','As Admin, open Dashboard.','Date/month filters, Needs Attention, attendance metrics, late analysis, top late employees, memo reminders, and exemption inbox appear. File upload/import/export/history controls and Files Uploaded metric are absent.'],
+ ['S-10','HR Dashboard scope','As HR, open Dashboard.','HR upload, import, report, export, and file-history features are available.'],
+ ['S-11','Filters','Change Dashboard month and date filters.','Metrics, charts, and lists update to the selected scope.'],
+ ['S-12','Notifications','Open the bell as HR and Admin.','Memo alerts remain visible. Admin sees pending exemption items; HR sees decisions on exemptions they submitted. Clear empty states appear when none exist.'],
+ ['S-13','Employee searchable comboboxes','In Exemptions, Manual Undertime, Absences, and Add Manual Late, type part of a known active APP and WAIS employee name, then click a result.','Typing filters active employees. Clicking a result selects it. An unknown typed name cannot be saved.'],
+ ['S-14','Informed people comboboxes','In Exemptions and Manual Undertime, search for Sir Gatch, Ma’am Chona, and HR Louissa. Add and remove each. Then add a custom name.','Selected people become removable chips. Standard people and custom names work.'],
+ ['S-15','Exemption empty/validation state','Open Exemptions without an employee/date. Then choose an employee/date with no eligible late.','Matching Late Record stays unavailable until required data is selected. A clear no-eligible-late message appears where applicable.'],
+ ['S-16','Undertime validation','In Manual Undertime, enter identical or reversed From and To times.','A clear message says To time must be later than From time.'],
+ ['S-17','Half-Day validation','In Half-Day, select a Sunday.','A clear message explains that Sunday has no normal half-day schedule.'],
+ ['S-18','Empty states and refresh','Open every main page with no matching records for the chosen filter, then refresh the page.','Each page shows a clear empty/loading state and reloads without a blank screen or unexpected sign-out.'],
+ ['S-19','Responsive layout','Test desktop, tablet, and phone widths.','Navigation, forms, cards, buttons, searchable fields, and notification bell remain usable without clipped controls or horizontal scrolling.'],
+ ['S-20','Network-error handling','Temporarily disconnect network, refresh a data page, then reconnect.','The app shows a safe error/loading/empty state and does not crash.']
+ ]},
+ {name:'2. Live-data tests — use approved disposable records only', tests:[
+ ['D-01','Submit linked exemption','As HR, choose an approved disposable uploaded late. Select the matching employee, exact date, exact late, informed people, and reason. Submit.','A Pending exemption is created. The exact late remains counted while Pending.'],
+ ['D-02','Pending exemption display','Refresh as submitting HR.','The pending exemption remains visible with its status, reason, date, and informed people.'],
+ ['D-03','Admin approval visibility','As either Admin, open Approvals.','The pending request appears with employee, date, reason, and informed people.'],
+ ['D-04','Approve exemption','Enter an optional review remark and choose Approve.','A success message appears. The request leaves Pending and appears in Approval History as Approved.'],
+ ['D-05','Approval history','Inspect the approved item in Approval History.','Employee, date, decision, reviewer, review time, remarks, and informed people are displayed read-only.'],
+ ['D-06','HR approval notification','Return to the submitting HR account, refresh, and open notifications.','An Approved decision item appears.'],
+ ['D-07','Exact-late result after approval','Check Late Records and Dashboard totals.','Only the linked late is excluded from late totals. Other late records are unchanged.'],
+ ['D-08','Decline exemption','Create a second disposable exemption and choose Decline as either Admin.','It appears in Approval History as Declined, including review information and informed people.'],
+ ['D-09','Exact-late result after decline','Return to submitting HR, refresh, and check notifications/totals.','A Declined decision item appears. The linked late remains counted.'],
+ ['D-10','Duplicate exemption prevention','Attempt a second exemption for a late already linked to a Pending or Approved exemption.','The late is unavailable or submission is blocked as a duplicate.'],
+ ['D-11','Self-approval prevention','If an Admin submitted a disposable exemption, attempt approval using that same Admin account.','Self-approval is blocked with a clear message.'],
+ ['D-12','Cross-workspace exemption','When approved for testing, select a WAIS employee and APP late record with matching name/date, or the reverse.','HR can submit it and either Admin can review it.'],
+ ['D-13','Absence saves without approval','As HR, add one approved disposable absence. Refresh Absences.','The record saves, persists after refresh, and needs no Admin approval.'],
+ ['D-14','Manual Undertimes saves without approval','As HR, add an approved disposable Manual Undertime with valid From/To, reason, and informed people. Refresh.','Correct duration, reason, and informed people persist. No approval is needed.'],
+ ['D-15','Manual Half-Day schedules','Create disposable weekday and Saturday Half-Day records.','Weekday periods are 8:00–12:00 and 1:00–5:00. Saturday periods are 7:00–11:00 and 11:15–3:15. No approval is needed.'],
+ ['D-16','Recycle Bin','Move a disposable absence, manual undertime, exemption, or manual late to Recycle Bin, then restore it.','It disappears from active records, appears in Recycle Bin, and restores exactly once to its original page.'],
+ ['D-17','Weekday generated classification','Upload an approved disposable attendance file with a weekday 12:00 PM and a weekday time between 12:00 PM and 1:00 PM.','Each is created/shown as Half-Day, never as generated Undertime for the same employee/date/source.'],
+ ['D-18','Saturday 11:00 classification','Upload an approved disposable Saturday 11:00 AM attendance row.','It is created/shown as Half-Day, never as generated Undertime for the same employee/date/source.'],
+ ['D-19','Saturday 11:01 classification','Upload an approved disposable Saturday 11:01 AM attendance row.','It is created/shown as generated Undertime of exactly 1 minute, never Half-Day.'],
+ ['D-20','Duplicate generated records','Only if approved, upload the same disposable test file again.','Duplicate late, undertime, and half-day records are prevented.']
+ ]},
+ {name:'3. Production smoke test after deployment', tests:[
+ ['P-01','Production page loads','Open the production URL in a private/incognito browser window.','The login page loads over HTTPS with no browser security warning.'],
+ ['P-02','Production role smoke test','Sign in as APP HR and APP ADMIN.','Each account receives the correct role-specific menu and access.'],
+ ['P-03','Production authorized pages','Open authorized Dashboard, Employees, Exemptions, Undertime, Half-Day, and Approvals pages.','Each page loads correctly. Unauthorized paths remain blocked.'],
+ ['P-04','Production notification smoke test','Open the notification bell as HR and Admin.','The bell opens correctly and shows current data or an honest empty state.'],
+ ['P-05','Production persistence smoke test','Refresh Dashboard and one role-appropriate work page.','Existing production data loads and the signed-in session remains active.'],
+ ['P-06','Production responsive smoke test','Use a phone or browser device mode.','Menu, fields, buttons, notification bell, and pages remain usable.'],
+ ['P-07','Production clean-data check','Confirm all disposable QA records are cleaned up.','No QA records remain in active lists, metrics, notifications, or reports.']
+ ]}
+];
+const publish=['All safe tests passed or have an accepted exception.','All required live-data tests passed.','Disposable QA records were cleaned up through normal UI actions.','All four login account checks passed.','Role and direct-route restrictions passed.','Exemption pending, approval, decline, notifications, exact-late handling, and history passed.','Generated weekday/Saturday classification tests passed.','Desktop and mobile checks passed.','No Critical or High defects remain open.','Production backup and rollback plan are confirmed.','Release owner approved publishing.'];
+const key='hr-attendance-manual-qa-v1';
+const data=JSON.parse(localStorage.getItem(key)||'{}');
+function save(){localStorage.setItem(key,JSON.stringify(data));updateProgress()}
+function esc(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function render(){const root=document.getElementById('tests');root.innerHTML=sections.map(section=>`<h2>${section.name}</h2><section class="section">${section.tests.map(([id,title,steps,expected])=>`<article class="test"><div class="id">${id}</div><div class="title">${title}</div><div class="meta"><div><div class="label">Steps</div><div class="value">${esc(steps)}</div></div><div><div class="label">Expected result</div><div class="value">${esc(expected)}</div></div></div><div class="choices">${['Pass','Fail','Not Tested'].map(status=>`<label class="choice ${status==='Fail'?'fail':status==='Not Tested'?'nt':''}"><input type="radio" name="${id}" value="${status}" ${data[id]?.status===status?'checked':''} onchange="setStatus('${id}',this.value)"> ${status}</label>`).join('')}</div><textarea placeholder="Notes, error message, screenshot link, or cleanup details" oninput="setNote('${id}',this.value)">${esc(data[id]?.note||'')}</textarea></article>`).join('')}</section>`).join('');document.getElementById('publish').innerHTML=publish.map((item,i)=>`<label><input type="checkbox" ${data['publish'+i]?'checked':''} onchange="data['publish'+${i}]=this.checked;save()">${item}</label>`).join('<br>');updateProgress()}
+function setStatus(id,status){data[id]={...(data[id]||{}),status};save()}function setNote(id,note){data[id]={...(data[id]||{}),note};save()}function updateProgress(){const total=sections.flatMap(s=>s.tests).length,done=Object.values(data).filter(x=>x&&typeof x==='object'&&x.status&&x.status!=='Not Tested').length,failed=Object.values(data).filter(x=>x&&typeof x==='object'&&x.status==='Fail').length;document.getElementById('progress').textContent=`Completed: ${done}/${total} • Failed: ${failed}`}
+function copyReport(){let out='HR ATTENDANCE SYSTEM — MANUAL QA RESULTS\n\n';sections.forEach(s=>{out+=s.name+'\n';s.tests.forEach(([id,title])=>{const x=data[id]||{};out+=`- ${id} — ${title}: ${x.status||'Not Tested'}${x.note?`\n  Notes: ${x.note}`:''}\n`});out+='\n'});out+='FINAL PUBLISH CHECKLIST\n'+publish.map((x,i)=>`- [${data['publish'+i]?'x':' '}] ${x}`).join('\n');navigator.clipboard.writeText(out).then(()=>alert('QA report copied. Paste it into ChatGPT.'));}
+function clearResults(){if(confirm('Clear all QA results and notes?')){localStorage.removeItem(key);location.reload()}}render();
+</script></body></html>

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:focused": "node --test tests/role-and-attendance-forms.test.mts",
     "preview": "vite preview"
   },
   "dependencies": {

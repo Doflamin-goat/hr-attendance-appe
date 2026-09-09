@@ -5,7 +5,6 @@ import {
   X,
   FileSpreadsheet,
   Plus,
-  PenLine,
   Trash2,
 } from "lucide-react";
 import { useAttendance, type LateRecord } from "../context/AttendanceContext";
@@ -18,6 +17,7 @@ import {
   Badge,
   Input,
   Select,
+  SearchableCombobox,
   AlertMessage,
   ConfirmModal,
   DataTable,
@@ -75,6 +75,7 @@ export function LateRecords() {
   // Add Manual Late modal state
   const [isManualLateOpen, setIsManualLateOpen] = useState(false);
   const [mlName, setMlName] = useState("");
+  const [mlEmployeeId, setMlEmployeeId] = useState("");
   const [mlDate, setMlDate] = useState("");
   const [mlTimeIn, setMlTimeIn] = useState("");
   const [mlOfficialStart, setMlOfficialStart] = useState("08:00");
@@ -251,12 +252,17 @@ export function LateRecords() {
 
   const resetManualLateForm = () => {
     setMlName("");
+    setMlEmployeeId("");
     setMlDate("");
     setMlTimeIn("");
     setMlOfficialStart("08:00");
     setMlGrace("6");
     setMlReason("");
     setMlFeedback(null);
+    if (!mlEmployeeId) {
+      setMlFeedback({ type: "error", message: "Choose an active employee from the list." });
+      return;
+    }
   };
 
   const closeManualLateModal = () => {
@@ -462,31 +468,7 @@ export function LateRecords() {
                 />
               )}
 
-              <div>
-                <p className="text-sm font-medium text-slate-700 mb-1.5">
-                  Employee
-                </p>
-                {activeEmployees.length > 0 ? (
-                  <Select
-                    value={mlName}
-                    onChange={(e) => setMlName(e.target.value)}
-                  >
-                    <option value="">Select an employee…</option>
-                    {activeEmployees.map((emp) => (
-                      <option key={emp.id} value={emp.fullName}>
-                        {emp.fullName}
-                      </option>
-                    ))}
-                  </Select>
-                ) : (
-                  <Input
-                    value={mlName}
-                    onChange={(e) => setMlName(e.target.value)}
-                    placeholder="Dela Cruz, Juan"
-                    leftIcon={<PenLine className="w-4 h-4" />}
-                  />
-                )}
-              </div>
+              <SearchableCombobox label="Employee" required value={mlName} placeholder="Search active employees" options={activeEmployees.map((employee) => ({ id: employee.id, label: employee.fullName }))} onClear={() => { setMlEmployeeId(""); setMlName(""); }} onSelect={(employee) => { setMlEmployeeId(employee.id); setMlName(employee.label); }} />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input

@@ -23,11 +23,11 @@ import {
   loadAttendanceData,
   loadDeletedAttendanceData,
   removeManualHrRecordFromRecycleBin,
+  restoreApprovedExemptionLate,
   removeUploadedFileBatchFromRecycleBin,
   restoreManualHrRecord,
   restoreUploadedFileBatch,
   saveAbsenceRecord,
-  saveExemptionRecord,
   saveManualUndertimeRecord,
   saveMemoReads,
   saveUploadedAttendanceFile,
@@ -40,6 +40,7 @@ import {
   softDeleteManualLateRecord,
 } from "../services/manualLateService";
 import { computeManualLate } from "../utils/manualLate";
+import { classifyGeneratedHalfDay, generatedUndertimeMinutes } from "../utils/attendanceForms";
 import { toast } from "../components/ui";
 
 
@@ -56,6 +57,9 @@ export interface LateRecord {
   sourceFileId: string;
   sourceFileName: string;
   sourceType?: LateRecordSourceType;
+  workspace?: "APP" | "WAIS";
+  isDeleted?: boolean;
+  workDate?: string;
 }
 
 export interface ManualLateRecord {
@@ -85,6 +89,17 @@ export interface GeneratedUndertime {
   timeIn: string;
   sourceFileId: string;
   sourceFileName: string;
+  minutesUndertime?: number;
+}
+
+export interface GeneratedHalfDay {
+  name: string;
+  date: string;
+  period: "afternoon";
+  scheduledStart: string;
+  scheduledEnd: string;
+  reason: string;
+  sourceFileName: string;
 }
 
 export interface Exemption {
@@ -93,6 +108,16 @@ export interface Exemption {
   reason: string;
   date: string;
   minutesLate?: number;
+  time?: string;
+  informed?: string[];
+  approvalStatus?: "pending" | "approved" | "declined";
+  lateRecordId?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewRemarks?: string;
+  lateTime?: string;
+  lateRestoredAt?: string;
+  lateRestoredBy?: string;
 }
 
 export interface AbsentRecord {
@@ -112,6 +137,7 @@ export interface UndertimeRecord {
   originalTimeIn?: string;
   sourceType?: "manual-entry" | "late-conversion";
   isManualOverride?: boolean;
+  informed?: string[];
 }
 
 export interface MemoAlert {
@@ -146,6 +172,7 @@ interface AttendanceState {
   loading: boolean;
   fileName: string;
   uploadedFiles: UploadedAttendanceFile[];
+  allLateRecords: LateRecord[];
   lateRecords: LateRecord[];
   lateSummary: LateSummary[];
   generatedUndertimes: GeneratedUndertime[];
@@ -160,6 +187,7 @@ interface AttendanceState {
   selectedDayScope: string;
   setSelectedMonthScope: (scope: string) => void;
   setSelectedDayScope: (scope: string) => void;
+  refreshAttendanceData: () => Promise<void>;
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   addExemption: (ex: Omit<Exemption, "id">) => {
     success: boolean;
@@ -202,7 +230,7 @@ interface AttendanceState {
   deleteAbsencesByMonth: (monthKey: string) => void;
   deleteExemptionsByMonth: (monthKey: string) => void;
   deleteManualUndertimesByMonth: (monthKey: string) => void;
-  removeExemptionAdjustment: (id: string) => void;
+  restoreExemptionLate: (id: string) => Promise<void>;
   removeManualUndertimeAdjustment: (id: string) => void;
   markAllMemoAlertsAsRead: () => void;
   exportFilteredWorkbook: () => Promise<{ success: boolean; message: string }>;
@@ -457,6 +485,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       sourceFileId: `manual:${record.id}`,
       sourceFileName: "Manual Entry",
       sourceType: "manual-entry" as LateRecordSourceType,
+      isDeleted: false,
     }));
 
     return [...excelLates, ...manualLates];
@@ -531,12 +560,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
         .filter(Boolean) as string[]
     );
 
-    const adjustmentCountMap = new Map<string, number>();
+    const approvedExemptionLateIds = new Set(
+      exemptionsState
+        .filter((ex) => ex.approvalStatus === "approved" && ex.lateRecordId && !ex.lateRestoredAt)
+        .map((ex) => ex.lateRecordId as string)
+    );
 
-    exemptionsState.forEach((ex) => {
-      const key = `${normalizeName(ex.name)}|${normalizeDate(ex.date)}`;
-      adjustmentCountMap.set(key, (adjustmentCountMap.get(key) ?? 0) + 1);
-    });
+    const adjustmentCountMap = new Map<string, number>();
 
     manualUndertimesState
       .filter((ut) => !ut.sourceLateRecordId)
@@ -549,6 +579,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
 
     return allLateRecords.filter((record) => {
       if (linkedUndertimeLateIds.has(record.id)) {
+        return false;
+      }
+
+      if (approvedExemptionLateIds.has(record.id)) {
         return false;
       }
 
@@ -651,6 +685,12 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
+    if (uploadedFiles.some((uploadedFile) => uploadedFile.fileName.toLocaleLowerCase() === file.name.toLocaleLowerCase())) {
+      toast.error("Duplicate upload blocked", "This attendance file has already been uploaded.");
+      e.target.value = "";
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onload = (event) => {
@@ -662,6 +702,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
           const newFileId = createId();
           const parsedLateRecords: LateRecord[] = [];
           const parsedGeneratedUndertime: GeneratedUndertime[] = [];
+          const parsedGeneratedHalfDays: GeneratedHalfDay[] = [];
 
           const allExistingLateKeys = new Set(
             uploadedFiles.flatMap((uploadedFile) =>
@@ -700,9 +741,16 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
               const minutes = dateTime.getMinutes();
               const seconds = dateTime.getSeconds();
               const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+              const workDate = `${dateTime.getFullYear()}-${String(dateTime.getMonth() + 1).padStart(2, "0")}-${String(dateTime.getDate()).padStart(2, "0")}`;
 
               let isLate = false;
               let isUndertime = false;
+              const generatedHalfDay = classifyGeneratedHalfDay(
+                workDate,
+                hours,
+                minutes,
+                seconds
+              );
               let minutesLate = 0;
               let secondsLate = 0;
               let totalSecondsLateValue = 0;
@@ -717,9 +765,9 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                   (hours === 9 || hours === 10 || hours === 11);
 
                 const afternoonUndertime =
-                  totalSeconds >= 12 * 3600 && totalSeconds <= 17 * 3600;
+                  totalSeconds > 13 * 3600 && totalSeconds <= 17 * 3600;
 
-                if (exactHourUndertime || afternoonUndertime) {
+                if (!generatedHalfDay && (exactHourUndertime || afternoonUndertime)) {
                   isUndertime = true;
                 } else if (totalSeconds >= lateStart) {
                   isLate = true;
@@ -737,9 +785,9 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                   (hours === 8 || hours === 9 || hours === 10 || hours === 11);
 
                 const afternoonUndertime =
-                  totalSeconds >= 12 * 3600 && totalSeconds <= 17 * 3600;
+                  totalSeconds > 11 * 3600 && totalSeconds <= 15 * 3600;
 
-                if (exactHourUndertime || afternoonUndertime) {
+                if (!generatedHalfDay && (exactHourUndertime || afternoonUndertime)) {
                   isUndertime = true;
                 } else if (totalSeconds >= lateStart) {
                   isLate = true;
@@ -753,7 +801,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
               const dateStr = dateTime.toLocaleDateString("en-US");
               const recordKey = makeRecordKey(name, dateStr, timeIn);
 
-              if (isUndertime) {
+              if (generatedHalfDay) {
+                parsedGeneratedHalfDays.push({
+                  name,
+                  date: dateStr,
+                  period: generatedHalfDay.period,
+                  scheduledStart: generatedHalfDay.scheduledStart,
+                  scheduledEnd: generatedHalfDay.scheduledEnd,
+                  reason: "Generated from attendance upload",
+                  sourceFileName: file.name,
+                });
+              } else if (isUndertime) {
                 if (!allExistingUndertimeKeys.has(recordKey)) {
                   allExistingUndertimeKeys.add(recordKey);
                   parsedGeneratedUndertime.push({
@@ -761,6 +819,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                     name,
                     date: dateStr,
                     timeIn,
+                    minutesUndertime: generatedUndertimeMinutes(workDate, hours, minutes, seconds),
                     sourceFileId: newFileId,
                     sourceFileName: file.name,
                   });
@@ -784,10 +843,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
             }
           });
 
-          if (parsedLateRecords.length === 0 && parsedGeneratedUndertime.length === 0) {
+          if (parsedLateRecords.length === 0 && parsedGeneratedUndertime.length === 0 && parsedGeneratedHalfDays.length === 0) {
             toast.warning(
               "Nothing to import",
-              "No late or undertime records were found in this file."
+              "No late, undertime, or half-day records were found in this file."
             );
 
             if (e.target) {
@@ -802,11 +861,12 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
             file.name,
             parsedLateRecords,
             parsedGeneratedUndertime,
+            parsedGeneratedHalfDays,
             file
           );
 
           const uploadedDay =
-            parsedLateRecords[0]?.date || parsedGeneratedUndertime[0]?.date || null;
+            parsedLateRecords[0]?.date || parsedGeneratedUndertime[0]?.date || parsedGeneratedHalfDays[0]?.date || null;
 
           await applyDatabaseData(false);
           setFileName(file.name);
@@ -846,77 +906,27 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     reader.readAsBinaryString(file);
   };
 
-  const addExemption = (ex: Omit<Exemption, "id">) => {
-    const exemptionDate = normalizeDate(ex.date);
-    const normalizedExemptionName = normalizeName(ex.name);
-
-    if (!uploadedAvailableDates.includes(exemptionDate)) {
-      return {
-        success: false,
-        message: "This date is not found in uploaded attendance files.",
-      };
-    }
-
-    const matchingLateRecords = allLateRecords.filter(
-      (record) =>
-        normalizeName(record.name) === normalizedExemptionName &&
-        record.date === exemptionDate
-    );
-
-    if (matchingLateRecords.length === 0) {
-      return {
-        success: false,
-        message: "No matching late record found for this employee and date.",
-      };
-    }
-
-    const sameExemptionExists = exemptionsState.some(
-      (item) =>
-        normalizeName(item.name) === normalizedExemptionName &&
-        normalizeDate(item.date) === exemptionDate &&
-        item.reason.trim().toLowerCase() === ex.reason.trim().toLowerCase()
-    );
-
-    if (sameExemptionExists) {
-      return {
-        success: false,
-        message: "This exemption appears to be already saved.",
-      };
-    }
-
-    const newExemption: Exemption = {
-      ...ex,
-      id: createId(),
-    };
-
-    setExemptions((prev) => [newExemption, ...prev]);
-    setSelectedMonthScope(getMonthKey(exemptionDate));
-    setSelectedDayScope(exemptionDate);
-
-    if (workspace) {
-      void saveExemptionRecord(workspace, newExemption).catch((error) => {
-        console.error("Failed to save exemption to Supabase:", error);
-        toast.error(
-          "Database sync failed",
-          "Exemption was added on screen but failed to save to database."
-        );
-      });
-    }
-
+  const addExemption = (_ex: Omit<Exemption, "id">) => {
+    void _ex;
     return {
-      success: true,
-      message: "Exemption saved successfully and matching late record is now excluded.",
+      success: false,
+      message: "Select an exact late record and submit it through the Exemptions form.",
     };
   };
 
   const addAbsence = (ab: Omit<AbsentRecord, "id">) => {
     const absenceDate = normalizeDate(ab.date);
+    const normalizedName = normalizeName(ab.name);
 
     if (!uploadedAvailableDates.includes(absenceDate)) {
       return {
         success: false,
         message: "This date is not found in uploaded attendance files.",
       };
+    }
+
+    if (absencesState.some((record) => normalizeName(record.name) === normalizedName && normalizeDate(record.date) === absenceDate)) {
+      return { success: false, message: "An absence already exists for this employee and date." };
     }
 
     const newAbsence: AbsentRecord = {
@@ -967,6 +977,11 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
         message:
           "No matching late record found for this employee and date. Manual undertime will only offset a late record if name and date match.",
       };
+    }
+
+
+    if (manualUndertimesState.some((record) => normalizeName(record.name) === normalizedName && normalizeDate(record.date) === undertimeDate)) {
+      return { success: false, message: "A manual undertime record already exists for this employee and date." };
     }
 
     const newUndertime: UndertimeRecord = {
@@ -1310,18 +1325,9 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  // Removes the exemption so the underlying late record reappears in
-  // Late Records. This is NOT a recycle-bin restore — the exemption row
-  // is moved to Trash (soft delete), where it can be restored from the
-  // Recycle Bin page.
-  const removeExemptionAdjustment = (id: string) => {
-    setExemptions((prev) => prev.filter((record) => record.id !== id));
-
-    void deleteExemptionRecord(id, {
-      reason: "exemption_removed_for_late",
-    }).catch((error) => {
-      console.error("Failed to move exemption to Trash:", error);
-    });
+  const restoreExemptionLate = async (id: string) => {
+    await restoreApprovedExemptionLate(id);
+    await applyDatabaseData(false);
   };
 
   const deleteManualUndertimesByMonth = (monthKey: string) => {
@@ -1405,6 +1411,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     absence: "Absence",
     manual_undertime: "Manual undertime",
     manual_late: "Manual late",
+    half_day: "Half-day",
   };
 
   const restoreManualHrRecordAction = async (
@@ -2082,6 +2089,7 @@ const getTeam = (name: string) => {
         loading: authLoading || !isStorageHydrated,
         fileName,
         uploadedFiles,
+        allLateRecords,
         lateRecords,
         lateSummary,
         generatedUndertimes,
@@ -2096,6 +2104,7 @@ const getTeam = (name: string) => {
         selectedDayScope,
         setSelectedMonthScope,
         setSelectedDayScope,
+        refreshAttendanceData: () => applyDatabaseData(false),
         handleFileUpload,
         addExemption,
         addAbsence,
@@ -2113,7 +2122,7 @@ const getTeam = (name: string) => {
         deleteAbsencesByMonth,
         deleteExemptionsByMonth,
         deleteManualUndertimesByMonth,
-        removeExemptionAdjustment,
+        restoreExemptionLate,
         removeManualUndertimeAdjustment,
         markAllMemoAlertsAsRead,
         exportFilteredWorkbook,

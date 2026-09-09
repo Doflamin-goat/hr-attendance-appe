@@ -15,26 +15,33 @@ import {
   X,
   ChevronRight,
   Trash2,
+  ClipboardCheck,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
 import { useAttendance } from "../../context/AttendanceContext";
 import { useAuth } from "../../context/AuthContext";
 import { ThemeToggle } from "../ui";
+import { loadAttendanceNotifications, type AttendanceNotification } from "../../services/notificationService";
 
 type NavItem = {
   name: string;
   href: string;
   icon: typeof LayoutDashboard;
+  roles?: ("Admin" | "HR")[];
 };
 
 const navigation: NavItem[] = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Employees", href: "/employees", icon: Users },
-  { name: "Late Records", href: "/lates", icon: Clock },
-  { name: "Exemptions", href: "/exemptions", icon: ShieldCheck },
-  { name: "Absences", href: "/absences", icon: UserX },
-  { name: "Undertime", href: "/undertime", icon: Timer },
-  { name: "Recycle Bin", href: "/recycle-bin", icon: Trash2 },
+  { name: "Late Records", href: "/lates", icon: Clock, roles: ["HR"] },
+  { name: "Exemptions", href: "/exemptions", icon: ShieldCheck, roles: ["HR"] },
+  { name: "Absences", href: "/absences", icon: UserX, roles: ["HR"] },
+  { name: "Undertime", href: "/undertime", icon: Timer, roles: ["HR"] },
+  { name: "Half-Day", href: "/half-day", icon: CalendarRange, roles: ["HR"] },
+  { name: "Recycle Bin", href: "/recycle-bin", icon: Trash2, roles: ["HR"] },
+  { name: "Approvals", href: "/approvals", icon: ClipboardCheck, roles: ["Admin"] },
 ];
 
 function formatMonthLabel(monthKey: string) {
@@ -56,7 +63,7 @@ function formatDayLabel(dayValue: string) {
 type SidebarContentProps = {
   pathname: string;
   workspace: string | null;
-  email: string | null;
+  role: "Admin" | "HR" | null;
   trashCount: number;
   onSignOut: () => void;
   onNavigate?: () => void;
@@ -65,7 +72,7 @@ type SidebarContentProps = {
 function SidebarContent({
   pathname,
   workspace,
-  email,
+  role,
   trashCount,
   onSignOut,
   onNavigate,
@@ -92,7 +99,7 @@ function SidebarContent({
         </p>
 
         <ul className="space-y-0.5">
-          {navigation.map((item) => {
+          {navigation.filter((item) => !item.roles || (role && item.roles.includes(role))).map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
             const showTrashBadge =
@@ -138,14 +145,14 @@ function SidebarContent({
       <div className="border-t border-slate-200 p-3">
         <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
           <div className="w-8 h-8 rounded-full bg-brand-50 text-brand-700 border border-brand-100 flex items-center justify-center text-xs font-bold flex-shrink-0">
-            HR
+            {role ?? "?"}
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-slate-900 truncate">
               {workspace ?? "No workspace"}
             </p>
             <p className="text-[11px] text-slate-500 truncate">
-              {email ?? "No email"}
+              {role ? `${role} access` : "Signed in"}
             </p>
           </div>
           <button
@@ -174,9 +181,17 @@ export function RootLayout() {
     deletedAttendanceCount,
     loadDeletedAttendanceData,
     loading: attendanceLoading,
+    exemptions,
   } = useAttendance();
 
-  const { workspace, email, signOut } = useAuth();
+  const { workspace, signOut } = useAuth();
+  const { role } = useAuth();
+  const [attendanceNotifications, setAttendanceNotifications] = useState<AttendanceNotification[]>([]);
+
+  useEffect(() => {
+    if (!role) { setAttendanceNotifications([]); return; }
+    void loadAttendanceNotifications(role, workspace).then(setAttendanceNotifications).catch(() => setAttendanceNotifications([]));
+  }, [role, workspace, exemptions]);
   const [isBellOpen, setIsBellOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
@@ -204,7 +219,7 @@ export function RootLayout() {
         <SidebarContent
           pathname={location.pathname}
           workspace={workspace}
-          email={email}
+          role={role}
           trashCount={deletedAttendanceCount}
           onSignOut={handleSignOut}
         />
@@ -229,7 +244,7 @@ export function RootLayout() {
             <SidebarContent
               pathname={location.pathname}
               workspace={workspace}
-              email={email}
+              role={role}
               trashCount={deletedAttendanceCount}
               onSignOut={() => {
                 setIsMobileNavOpen(false);
@@ -276,9 +291,9 @@ export function RootLayout() {
                 >
                   <Bell className="w-5 h-5" />
 
-                  {unreadMemoCount > 0 && (
+                  {(unreadMemoCount + attendanceNotifications.length) > 0 && (
                     <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-danger-600 text-white text-[10px] font-bold flex items-center justify-center">
-                      {unreadMemoCount}
+                      {unreadMemoCount + attendanceNotifications.length}
                     </span>
                   )}
                 </button>
@@ -294,10 +309,10 @@ export function RootLayout() {
                       <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-slate-900">
-                            Memo Notifications
+                            Notifications
                           </p>
                           <p className="text-xs text-slate-500">
-                            Employees with 4+ lates
+                            {role === "Admin" ? "Exemption approvals and memo reminders" : "Exemption decisions and memo reminders"}
                           </p>
                         </div>
 
@@ -314,6 +329,10 @@ export function RootLayout() {
                       </div>
 
                       <div className="max-h-[360px] overflow-y-auto">
+                        <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">Exemption updates</div>
+                        {attendanceNotifications.length === 0 && <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-3"><p className="text-xs font-semibold text-slate-700">Exemption inbox</p><p className="mt-1 text-xs leading-5 text-slate-500">{role === "Admin" ? "No pending exemptions in this workspace." : "No approved or declined exemptions submitted by you."}</p></div>}
+                        {attendanceNotifications.map((notification) => <div key={notification.id} className={`border-b border-slate-100 px-4 py-3 ${notification.status === "approved" ? "bg-success-50/40" : notification.status === "declined" ? "bg-danger-50/40" : "bg-warning-50/40"}`}><div className="flex items-start gap-3"><div className={`mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-full ${notification.status === "approved" ? "bg-success-100 text-success-700" : notification.status === "declined" ? "bg-danger-100 text-danger-700" : "bg-warning-100 text-warning-700"}`}>{notification.status === "approved" ? <CheckCircle2 className="h-4 w-4" /> : notification.status === "declined" ? <XCircle className="h-4 w-4" /> : <Clock className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><p className="text-sm font-semibold text-slate-900">{notification.employeeName}</p><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${notification.status === "approved" ? "bg-success-100 text-success-700" : notification.status === "declined" ? "bg-danger-100 text-danger-700" : "bg-warning-100 text-warning-700"}`}>{notification.status}</span></div><p className="mt-1 text-xs font-medium text-slate-600">{notification.title}</p><p className="mt-1 text-[11px] text-slate-500">Attendance date: {notification.workDate} • Late time: {notification.lateTime}</p>{notification.createdAt && <p className="mt-1 text-[11px] text-slate-400">Updated {new Date(notification.createdAt).toLocaleString()}</p>}</div></div></div>)}
+                        <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">Late notifications</div>
                         {memoAlerts.length === 0 ? (
                           <div className="px-4 py-10 text-center">
                             <Bell className="w-10 h-10 mx-auto text-slate-200 mb-3" />

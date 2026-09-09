@@ -131,6 +131,8 @@ function CompanyBadge({ workspace }: { workspace: Workspace | null }) {
 }
 
 export default function EmployeesPage() {
+  const { role } = useAuth();
+  const readOnly = role === "Admin";
   const { workspace: currentWorkspace } = useAuth();
   const {
     employees,
@@ -427,6 +429,7 @@ export default function EmployeesPage() {
       header: "Actions",
       align: "right",
       render: (row) => {
+        if (readOnly) return <span className="text-sm text-slate-500">View only</span>;
         if (!row.employee) {
           return (
             <Button
@@ -503,7 +506,7 @@ export default function EmployeesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Employee Directory"
-        description="Manage APP and WAIS employees in one HR master list. Attendance history is preserved when employees are deactivated."
+        description={readOnly ? "View the employee master list and attendance summary." : "Manage APP and WAIS employees in one HR master list. Attendance history is preserved when employees are deactivated."}
         actions={
           <>
             <Button
@@ -514,13 +517,14 @@ export default function EmployeesPage() {
             >
               Refresh
             </Button>
-            <Button
+            {!readOnly && <Button
               variant="primary"
               leftIcon={<UserPlus className="w-4 h-4" />}
               onClick={handleOpenAdd}
             >
               Add Employee
-            </Button>
+            </Button>}
+            {readOnly && <span className="inline-flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-600">Read-only access</span>}
           </>
         }
       />
@@ -575,8 +579,7 @@ export default function EmployeesPage() {
               Master List
             </h2>
             <p className="mt-0.5 text-sm text-slate-500">
-              Showing employees across all companies. Counts reflect uploaded
-              attendance and manual entries.
+              {readOnly ? "Read-only employee directory. Use All or Active to adjust the visible master list." : "Showing employees across all companies. Counts reflect uploaded attendance and manual entries."}
             </p>
           </div>
 
@@ -651,16 +654,16 @@ export default function EmployeesPage() {
         )}
       </Card>
 
-      <EmployeeFormModal
+      {!readOnly && <EmployeeFormModal
         open={modalOpen}
         mode={modalMode}
         defaultWorkspace={currentWorkspace ?? null}
         initial={editing}
         onClose={() => setModalOpen(false)}
         onSubmit={handleSubmit}
-      />
+      />}
 
-      <ConfirmModal
+      {!readOnly && <ConfirmModal
         open={confirmState?.kind === "deactivate"}
         tone="danger"
         title="Deactivate this employee?"
@@ -677,9 +680,9 @@ export default function EmployeesPage() {
         loading={actionPending && confirmState?.kind === "deactivate"}
         onConfirm={handleConfirmAction}
         onCancel={() => (actionPending ? null : setConfirmState(null))}
-      />
+      />}
 
-      <ConfirmModal
+      {!readOnly && <ConfirmModal
         open={confirmState?.kind === "restore"}
         tone="primary"
         title="Restore this employee?"
@@ -695,7 +698,7 @@ export default function EmployeesPage() {
         loading={actionPending && confirmState?.kind === "restore"}
         onConfirm={handleConfirmAction}
         onCancel={() => (actionPending ? null : setConfirmState(null))}
-      />
+      />}
     </div>
   );
 }

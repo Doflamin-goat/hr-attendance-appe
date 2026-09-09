@@ -10,14 +10,11 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { Button, Input, Select, AlertMessage, ThemeToggle } from "../components/ui";
+import { LOGIN_ACCOUNTS } from "../utils/loginAccounts";
 
 const REMEMBER_ACCOUNT_KEY = "timecore.rememberedAccount";
 const DEFAULT_ACCOUNT = "app@attendance.local";
 
-const ACCOUNT_OPTIONS: { value: string; label: string }[] = [
-  { value: "app@attendance.local", label: "APP" },
-  { value: "wais@attendance.local", label: "WAIS" },
-];
 
 const FEATURES = [
   {
@@ -98,7 +95,7 @@ export default function LoginPage() {
     const result = await signIn(email, password);
 
     if (!result.success) {
-      setErrorText(result.message);
+      setErrorText("Sign-in failed. Check the selected account and password, then try again.");
     }
 
     setIsSubmitting(false);
@@ -143,7 +140,7 @@ export default function LoginPage() {
 
       <div
         aria-hidden="true"
-        className={`absolute right-[-80px] top-[-80px] z-0 hidden h-[720px] w-[520px] rotate-12 rounded-[4rem] shadow-2xl backdrop-blur-2xl lg:block ${
+        className={`absolute right-[-72px] top-[-96px] z-0 hidden h-[620px] w-[430px] rotate-12 rounded-[4rem] shadow-2xl backdrop-blur-2xl lg:block ${
           isDark
             ? "border border-white/10 bg-white/[0.04]"
             : "border border-white/70 bg-white/35"
@@ -152,14 +149,14 @@ export default function LoginPage() {
 
       <div
         aria-hidden="true"
-        className={`absolute right-[120px] top-[92px] z-0 hidden h-[520px] w-[130px] rounded-[2rem] blur-[1px] lg:block ${
+        className={`absolute right-[104px] top-[112px] z-0 hidden h-[420px] w-[112px] rounded-[2rem] blur-[1px] lg:block ${
           isDark ? "bg-white/[0.04]" : "bg-white/35"
         }`}
       />
 
       <div
         aria-hidden="true"
-        className={`absolute right-[300px] top-[155px] z-0 hidden h-[420px] w-[90px] rounded-[2rem] blur-[1px] lg:block ${
+        className={`absolute right-[270px] top-[178px] z-0 hidden h-[320px] w-[78px] rounded-[2rem] blur-[1px] lg:block ${
           isDark ? "bg-brand-500/15" : "bg-blue-100/45"
         }`}
       />
@@ -258,7 +255,7 @@ export default function LoginPage() {
           </section>
 
           <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-8 lg:px-14">
-            <div className="w-full max-w-md">
+            <div className="w-full max-w-md py-4">
               <div className="mb-7 flex items-center gap-3 lg:hidden">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 shadow-sm ring-1 ring-brand-800/20">
                   <img
@@ -277,13 +274,13 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <div className="rounded-[1.75rem] border border-white/80 bg-white/95 p-7 shadow-[0_34px_90px_-38px_rgba(15,23,42,0.55)] backdrop-blur-xl sm:p-8">
+              <div className="rounded-[1.75rem] border border-white/80 bg-white/95 p-6 shadow-[0_34px_90px_-38px_rgba(15,23,42,0.55)] backdrop-blur-xl sm:p-8">
                 <div className="mb-6">
                   <h1 className="text-[22px] font-semibold leading-tight tracking-tight text-slate-950">
                     Sign in to your workspace
                   </h1>
                   <p className="mt-1.5 text-[13px] leading-5 text-slate-500">
-                    Use the assigned company account to access HR records.
+                    Select your assigned account and enter its password.
                   </p>
                 </div>
 
@@ -297,15 +294,15 @@ export default function LoginPage() {
                   </div>
                 )}
 
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleSubmit} className="space-y-5">
                   <Select
-                    label="Account Email"
+                    label="Sign in as"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   >
-                    {ACCOUNT_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
+                    {LOGIN_ACCOUNTS.map((account) => (
+                      <option key={account.email} value={account.email}>
+                        {account.label}
                       </option>
                     ))}
                   </Select>
@@ -319,7 +316,7 @@ export default function LoginPage() {
                     autoComplete="current-password"
                   />
 
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                     <label className="inline-flex cursor-pointer select-none items-center gap-2">
                       <input
                         type="checkbox"

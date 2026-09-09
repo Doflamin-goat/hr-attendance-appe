@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
+import { useEmployees } from "../context/EmployeesContext";
 import { UserX, Plus, CalendarDays, Trash2 } from "lucide-react";
 import {
   PageHeader,
@@ -7,6 +8,7 @@ import {
   Button,
   Input,
   Select,
+  SearchableCombobox,
   Textarea,
   Badge,
   EmptyState,
@@ -45,8 +47,9 @@ export function Absences() {
     deleteAbsencesByMonth,
     deleteAbsence,
   } = useAttendance();
+  const { activeEmployees } = useEmployees();
 
-  const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
+  const [formData, setFormData] = useState({ employeeId: "", name: "", reason: "", date: "" });
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -78,7 +81,7 @@ export function Absences() {
     e.preventDefault();
     setFeedback(null);
 
-    if (!formData.name || !formData.reason || !formData.date) {
+    if (!formData.employeeId || !formData.name || !formData.reason || !formData.date) {
       setFeedback({
         type: "error",
         message: "Please complete employee name, date, and reason.",
@@ -99,7 +102,7 @@ export function Absences() {
 
     if (result.success) {
       setSelectedMonth(getMonthKey(formData.date));
-      setFormData({ name: "", reason: "", date: "" });
+      setFormData({ employeeId: "", name: "", reason: "", date: "" });
     }
   };
 
@@ -150,15 +153,7 @@ export function Absences() {
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4 mt-5">
-              <Input
-                label="Employee Name"
-                required
-                placeholder="Dela Cruz, Juan"
-                value={formData.name}
-                onChange={(e) =>
-                  setFormData({ ...formData, name: e.target.value })
-                }
-              />
+              <SearchableCombobox label="Employee Name" required value={formData.name} placeholder="Search active employees" options={activeEmployees.map((employee) => ({ id: employee.id, label: employee.fullName }))} onClear={() => setFormData({ ...formData, employeeId: "", name: "" })} onSelect={(employee) => setFormData({ ...formData, employeeId: employee.id, name: employee.label })} />
 
               <Input
                 label="Date"

@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
+import { useEmployees } from "../context/EmployeesContext";
+import { durationMinutes, formatDuration } from "../utils/attendanceForms";
 import {
   Clock3,
   Plus,
@@ -14,6 +16,7 @@ import {
   Button,
   Input,
   Select,
+  SearchableCombobox,
   Textarea,
   EmptyState,
   AlertMessage,
@@ -49,13 +52,15 @@ export function Undertime() {
     removeManualUndertimeAdjustment,
     deleteManualUndertime,
   } = useAttendance();
+  const { activeEmployees } = useEmployees();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("manual");
   const [employeeName, setEmployeeName] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+  const [informed, setInformed] = useState<string[]>([]);
   const [date, setDate] = useState("");
   const [fromTime, setFromTime] = useState("");
   const [toTime, setToTime] = useState("");
-  const [period, setPeriod] = useState("AM");
   const [reason, setReason] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("all");
   const [feedback, setFeedback] = useState<{
@@ -65,6 +70,8 @@ export function Undertime() {
   const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  const calculatedDuration = useMemo(() => durationMinutes(fromTime, toTime), [fromTime, toTime]);
+  const informedOptions = ["Sir Gatch", "Ma’am Chona", "HR Louissa"];
 
   const monthOptions = useMemo(() => {
     const months = new Set<string>();
@@ -89,7 +96,7 @@ export function Undertime() {
 
   const handleSave = () => {
     if (
-      !employeeName.trim() ||
+      !employeeId ||
       !date ||
       !fromTime.trim() ||
       !toTime.trim() ||
@@ -101,14 +108,19 @@ export function Undertime() {
       });
       return;
     }
+    if (calculatedDuration === 0) {
+      setFeedback({ type: "error", message: "To time must be later than From time." });
+      return;
+    }
 
-    const undertimeHours = `${fromTime} to ${toTime} ${period}`;
+    const undertimeHours = `${fromTime} to ${toTime} (${formatDuration(calculatedDuration)})`;
 
     const result = addUndertime({
       name: employeeName.trim(),
       date,
       reason: reason.trim(),
       undertimeHours,
+      informed,
     });
 
     setFeedback({
@@ -118,11 +130,12 @@ export function Undertime() {
 
     if (result.success) {
       setEmployeeName("");
+      setEmployeeId("");
       setDate("");
       setFromTime("");
       setToTime("");
-      setPeriod("AM");
       setReason("");
+      setInformed([]);
       setSelectedMonth(getMonthKey(date));
     }
   };
@@ -234,6 +247,7 @@ export function Undertime() {
                     <p className="text-xs text-slate-500 mt-1">
                       {record.date} • {record.timeIn}
                     </p>
+                    {record.minutesUndertime !== undefined ? <p className="text-xs text-slate-500 mt-0.5">Undertime: {formatDuration(record.minutesUndertime)}</p> : null}
                     <p className="text-xs text-slate-500 mt-0.5">
                       Source: {record.sourceFileName}
                     </p>
@@ -250,16 +264,11 @@ export function Undertime() {
               icon={<Clock3 className="w-5 h-5" />}
               iconTone="brand"
               title="Add Undertime"
-              description="Record an approved manual adjustment."
+                description="Record a manual undertime entry. No approval is required."
             />
 
             <div className="space-y-4 mt-5">
-              <Input
-                label="Employee Name"
-                value={employeeName}
-                onChange={(e) => setEmployeeName(e.target.value)}
-                placeholder="Dela Cruz, Juan"
-              />
+              <SearchableCombobox label="Employee Name" value={employeeName} placeholder="Search active employees" options={activeEmployees.map((employee) => ({ id: employee.id, label: employee.fullName }))} onClear={() => { setEmployeeId(""); setEmployeeName(""); }} onSelect={(employee) => { setEmployeeId(employee.id); setEmployeeName(employee.label); }} />
 
               <Input
                 label="Date"
@@ -273,27 +282,17 @@ export function Undertime() {
                   Undertime Hours
                 </p>
                 <div className="grid grid-cols-2 gap-2">
-                  <Input
+                  <Input label="From time" type="time"
                     value={fromTime}
                     onChange={(e) => setFromTime(e.target.value)}
-                    placeholder="From"
                   />
-                  <Input
+                  <Input label="To time" type="time"
                     value={toTime}
                     onChange={(e) => setToTime(e.target.value)}
-                    placeholder="To"
                   />
                 </div>
+                <p className="mt-2 text-sm text-slate-600">Calculated duration: <span className="font-semibold text-slate-900">{calculatedDuration ? formatDuration(calculatedDuration) : "Select a valid time range"}</span></p>
               </div>
-
-              <Select
-                label="Period"
-                value={period}
-                onChange={(e) => setPeriod(e.target.value)}
-              >
-                <option value="AM">AM</option>
-                <option value="PM">PM</option>
-              </Select>
 
               <Textarea
                 label="Reason"
@@ -302,6 +301,11 @@ export function Undertime() {
                 placeholder="Official reason for undertime..."
                 rows={4}
               />
+
+              <div>
+                <p className="text-sm font-medium text-slate-700">Informed to</p>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+              </div>
 
               <Button
                 variant="primary"
@@ -380,6 +384,7 @@ export function Undertime() {
                           <p className="text-xs text-slate-500 mt-0.5">
                             Hours: {record.undertimeHours}
                           </p>
+                          {Array.isArray(record.informed) && record.informed.length > 0 ? <p className="text-xs text-slate-500 mt-0.5">Informed to: {record.informed.join(", ")}</p> : null}
                         </div>
 
                         <div className="flex flex-col items-start sm:items-end gap-2 flex-shrink-0">

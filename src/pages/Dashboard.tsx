@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
+import { useAuth } from "../context/AuthContext";
 import { normalizeEmployeeName } from "../services/employeeService";
 import DragDropUpload, {
   type DragDropUploadHandle,
@@ -87,6 +88,8 @@ type UploadedFileRow = {
 };
 
 export function Dashboard() {
+  const { role } = useAuth();
+  const isHr = role === "HR";
   const {
     loading: attendanceLoading,
     handleFileUpload,
@@ -417,7 +420,7 @@ export function Dashboard() {
     {
       key: "fileName",
       header: "File Name",
-      render: (row) => (
+      render: (row) => isHr ? (
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-brand-100 bg-brand-50 text-brand-700">
             <FileSpreadsheet className="h-4 w-4" />
@@ -426,7 +429,7 @@ export function Dashboard() {
             {row.fileName}
           </span>
         </div>
-      ),
+      ) : <span className="text-sm text-slate-500">View only</span>,
     },
     {
       key: "uploadedAt",
@@ -512,20 +515,20 @@ export function Dashboard() {
         endMeta={scopeChip}
         actions={
           <>
-            <Button
+            {isHr && <Button
               variant="secondary"
               leftIcon={<UploadCloud className="h-4 w-4" />}
               onClick={() => uploadRef.current?.open()}
             >
               Upload Attendance
-            </Button>
-            <Button
+            </Button>}
+            {isHr && <Button
               variant="primary"
               leftIcon={<Download className="h-4 w-4" />}
               onClick={handleExcelExport}
             >
               Export Excel
-            </Button>
+            </Button>}
           </>
         }
       />
@@ -545,12 +548,12 @@ export function Dashboard() {
         canReset={canResetFilters}
       />
 
-      <DashboardSection
+      {isHr && <DashboardSection
         eyebrow="Shortcuts"
         title="Quick Actions"
         description="Jump straight to the most common HR tasks."
       >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isHr ? "xl:grid-cols-4" : "xl:grid-cols-3"}`}>
           {quickActions.map((action) => {
             const Icon = action.icon;
             return (
@@ -578,7 +581,7 @@ export function Dashboard() {
             );
           })}
         </div>
-      </DashboardSection>
+      </DashboardSection>}
 
       <DashboardSection
         eyebrow="Action Required"
@@ -677,14 +680,14 @@ export function Dashboard() {
             accent
             hint="In selected scope"
           />
-          <StatCard
+          {isHr && <StatCard
             label="Absences"
             value={absences.length}
             icon={UserX}
             tone="danger"
             accent
             hint="In selected scope"
-          />
+          />}
           <StatCard
             label="Memo Alerts"
             value={memoAlerts.length}
@@ -698,12 +701,12 @@ export function Dashboard() {
         </div>
       </DashboardSection>
 
-      <DashboardSection
+      {isHr && <DashboardSection
         eyebrow="Secondary"
         title="Supporting Metrics"
         description="Detailed timing figures and supporting counts."
       >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isHr ? "xl:grid-cols-3" : "xl:grid-cols-2"}`}>
           <StatCard
             label="Late Minutes"
             value={totalLateMinutes}
@@ -720,16 +723,16 @@ export function Dashboard() {
             size="sm"
             hint="Generated + manual"
           />
-          <StatCard
+          {isHr && <StatCard
             label="Files Uploaded"
             value={uploadedFiles.length}
             icon={FolderOpen}
             tone="neutral"
             size="sm"
             hint="Attendance imports"
-          />
+          />}
         </div>
-      </DashboardSection>
+      </DashboardSection>}
 
       <DashboardSection
         eyebrow="Insights"
@@ -860,7 +863,7 @@ export function Dashboard() {
             ) : (
               <EmptyState
                 title="No summary yet"
-                description="Upload attendance files to populate this list."
+                description={isHr ? "Upload attendance files to populate this list." : "Attendance records in the selected scope will appear here."}
                 bordered
               />
             )}
@@ -868,6 +871,7 @@ export function Dashboard() {
         </div>
       </DashboardSection>
 
+      {isHr && <>
       <DashboardSection
         eyebrow="Data Management"
         title="Imports & Reports"
@@ -936,7 +940,7 @@ export function Dashboard() {
           description="All attendance files imported into the system."
           padded={false}
           actions={
-            uploadedFiles.length > 0 && (
+            isHr && uploadedFiles.length > 0 && (
               <Button
                 variant="danger"
                 size="sm"
@@ -967,6 +971,7 @@ export function Dashboard() {
           )}
         </DashboardCard>
       </DashboardSection>
+      </>}
 
       {memoAlerts.length > 0 && (
         <DashboardSection

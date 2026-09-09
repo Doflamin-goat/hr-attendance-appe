@@ -10,12 +10,14 @@ import type { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigError } from "../lib/supabase";
 
 type Workspace = "APP" | "WAIS";
+export type AppRole = "Admin" | "HR";
 
 interface AuthState {
   user: User | null;
   session: Session | null;
   loading: boolean;
   workspace: Workspace | null;
+  role: AppRole | null;
   email: string | null;
   configError: string;
   signIn: (
@@ -32,28 +34,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [role, setRole] = useState<AppRole | null>(null);
   const [email, setEmail] = useState<string | null>(null);
 
   async function loadProfile(authUser: User | null) {
     if (!authUser || !supabase) {
       setWorkspace(null);
+      setRole(null);
       setEmail(authUser?.email ?? null);
       return;
     }
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("email, workspace")
+      .select("email, workspace, role")
       .eq("id", authUser.id)
       .single();
 
     if (error || !data) {
       setWorkspace(null);
+      setRole(null);
       setEmail(authUser.email ?? null);
       return;
     }
 
     setWorkspace(data.workspace as Workspace);
+    setRole(data.role === "Admin" || data.role === "HR" ? data.role : null);
     setEmail(data.email ?? authUser.email ?? null);
   }
 
@@ -140,12 +146,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       loading,
       workspace,
+      role,
       email,
       configError: supabaseConfigError,
       signIn,
       signOut,
     }),
-    [user, session, loading, workspace, email]
+    [user, session, loading, workspace, role, email]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

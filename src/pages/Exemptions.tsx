@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck,
   Plus,
@@ -6,13 +6,17 @@ import {
   Trash2,
   RotateCcw,
 } from "lucide-react";
-import { useAttendance } from "../context/AttendanceContext";
+import { useAttendance, type Exemption, type LateRecord } from "../context/AttendanceContext";
+import { useEmployees } from "../context/EmployeesContext";
+import { loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption } from "../services/attendanceService";
+import { describeSubmitExemptionError, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
 import {
   PageHeader,
   Card,
   Button,
   Input,
   Select,
+  SearchableCombobox,
   Textarea,
   Badge,
   EmptyState,
@@ -48,13 +52,31 @@ export function Exemptions() {
   const {
     loading,
     exemptions,
-    addExemption,
+    refreshAttendanceData,
     deleteExemptionsByMonth,
-    removeExemptionAdjustment,
+    restoreExemptionLate,
     deleteExemption,
   } = useAttendance();
+  const { activeEmployees } = useEmployees();
 
-  const [formData, setFormData] = useState({ name: "", reason: "", date: "" });
+  const [formData, setFormData] = useState({ employeeId: "", employeeName: "", reason: "", date: "", time: "", informed: [] as string[] });
+  const [lateRecordId, setLateRecordId] = useState("");
+  const [workflowData, setWorkflowData] = useState<{ lateRecords: LateRecord[]; exemptions: Exemption[] }>({ lateRecords: [], exemptions: [] });
+  const employeeOptions = useMemo(() => [...activeEmployees].sort((a, b) => a.fullName.localeCompare(b.fullName)), [activeEmployees]);
+  const informedOptions = ["Sir Gatch", "Ma’am Chona", "HR Louissa"];
+  const selectedEmployee = useMemo(() => activeEmployees.find((employee) => employee.id === formData.employeeId), [activeEmployees, formData.employeeId]);
+  const matchingLates = useMemo(() => matchingLinkedLateRecords(workflowData.lateRecords, workflowData.exemptions, selectedEmployee?.fullName ?? "", formData.date), [workflowData, formData.date, selectedEmployee?.fullName]);
+  const selectedLate = matchingLates.find((item) => item.id === lateRecordId);
+  const lateLabelCounts = useMemo(() => matchingLates.reduce((counts, late) => {
+    const key = `${late.timeIn}|${late.minutesLate}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>()), [matchingLates]);
+  const refreshWorkflowData = async () => setWorkflowData(await loadCrossWorkspaceExemptionWorkflowData());
+  useEffect(() => {
+    const load = async () => { await refreshWorkflowData(); };
+    void load();
+  }, []);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -85,11 +107,11 @@ export function Exemptions() {
     );
   }, [exemptions, selectedMonth]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
-    if (!formData.name || !formData.reason || !formData.date) {
+    if (!formData.employeeId || !formData.reason || !formData.date) {
       setFeedback({
         type: "error",
         message: "Please complete employee name, date, and reason.",
@@ -97,20 +119,20 @@ export function Exemptions() {
       return;
     }
 
-    const result = addExemption({
-      name: formData.name,
-      reason: formData.reason,
-      date: formData.date,
-    });
-
-    setFeedback({
-      type: result.success ? "success" : "error",
-      message: result.message,
-    });
-
-    if (result.success) {
+    if (!selectedEmployee || !selectedLate || !Number.isSafeInteger(Number(selectedLate.id))) {
+      setFeedback({ type: "error", message: "Choose an eligible late record before submitting." });
+      return;
+    }
+    try {
+      await submitLinkedExemption({ employeeId: selectedEmployee.id, lateRecordId: Number(selectedLate.id), reason: formData.reason, reportedTime: formData.time || undefined, informedParties: formData.informed });
+      await refreshAttendanceData();
+      await refreshWorkflowData();
+      setFeedback({ type: "success", message: "Exemption submitted as Pending. The linked late remains counted until approval." });
       setSelectedMonth(getMonthKey(formData.date));
-      setFormData({ name: "", reason: "", date: "" });
+      setFormData({ employeeId: "", employeeName: "", reason: "", date: "", time: "", informed: [] });
+      setLateRecordId("");
+    } catch (error) {
+      setFeedback({ type: "error", message: describeSubmitExemptionError(error) });
     }
   };
 
@@ -126,18 +148,14 @@ export function Exemptions() {
     setConfirmDeleteMonth(false);
   };
 
-  const handleRestoreConfirm = () => {
+  const handleRestoreConfirm = async () => {
     if (!restoreTarget) return;
-    removeExemptionAdjustment(restoreTarget.id);
-    setFeedback({
-      type: "success",
-      message: `${restoreTarget.name}'s late on ${new Date(
-        restoreTarget.date
-      ).toLocaleDateString(
-        "en-US"
-      )} is back in Late Records. The exemption row was moved to Trash and can be restored from Recycle Bin.`,
-    });
-    setRestoreTarget(null);
+    try {
+      await restoreExemptionLate(restoreTarget.id);
+      await refreshWorkflowData();
+      setFeedback({ type: "success", message: `${restoreTarget.name}'s exact linked late is counted in Late Records again. The approved exemption remains in history.` });
+      setRestoreTarget(null);
+    } catch { setFeedback({ type: "error", message: "Could not restore the linked late record." }); }
   };
 
   const handleDeleteConfirm = () => {
@@ -151,7 +169,7 @@ export function Exemptions() {
     <div className="space-y-6">
       <PageHeader
         title="Late Exemptions"
-        description="Manage excused late arrivals by month."
+        description="Submit a linked late exemption for Admin review. Pending requests leave the late counted."
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -161,7 +179,7 @@ export function Exemptions() {
               icon={<ShieldCheck className="w-5 h-5" />}
               iconTone="brand"
               title="Add Exemption"
-              description="Excuse a recorded late arrival."
+              description="Choose an active employee, supply the attendance details, then submit for review."
             />
 
             {feedback && (
@@ -175,25 +193,25 @@ export function Exemptions() {
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4 mt-5">
-              <Input
-                label="Employee Name"
-                required
-                placeholder="Dela Cruz, Juan"
-                value={formData.name}
-                onChange={(e) =>
-                  setFormData({ ...formData, name: e.target.value })
-                }
-              />
+              <SearchableCombobox label="Employee Name" required value={formData.employeeName} placeholder="Search active employees" options={employeeOptions.map((employee) => ({ id: employee.id, label: employee.fullName }))} onClear={() => { if (formData.employeeId) setFormData({ ...formData, employeeId: "", employeeName: "" }); setLateRecordId(""); }} onSelect={(employee) => { setFormData({ ...formData, employeeId: employee.id, employeeName: employee.label }); setLateRecordId(""); }} />
 
               <Input
                 label="Date"
                 type="date"
                 required
                 value={formData.date}
-                onChange={(e) =>
-                  setFormData({ ...formData, date: e.target.value })
-                }
+                onChange={(e) => { setFormData({ ...formData, date: e.target.value }); setLateRecordId(""); }}
               />
+
+              <Select label="Matching Late Record" required value={lateRecordId} disabled={!formData.employeeId || !formData.date || matchingLates.length === 0} onChange={(event) => setLateRecordId(event.target.value)} hint="Choose the exact late arrival to exempt."><option value="">{matchingLates.length === 0 ? "No eligible late record" : "Select matching late"}</option>{matchingLates.map((late) => { const key = `${late.timeIn}|${late.minutesLate}`; return <option key={late.id} value={late.id}>{late.timeIn ?? "Recorded late"} — {late.minutesLate ?? 0} minutes late{(lateLabelCounts.get(key) ?? 0) > 1 ? ` • Record ${late.id}` : ""}</option>; })}</Select>
+              {formData.employeeName && formData.date && matchingLates.length === 0 && <p className="-mt-2 text-xs text-slate-500">No active, unlinked uploaded late record matches this employee and date.</p>}
+
+              <Input label="Time (optional)" type="time" value={formData.time} onChange={(e) => setFormData({ ...formData, time: e.target.value })} />
+
+              <fieldset>
+                <legend className="text-sm font-medium text-slate-700">Who was informed</legend>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Informed to" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+              </fieldset>
 
               <Textarea
                 label="Reason"
@@ -209,10 +227,11 @@ export function Exemptions() {
               <Button
                 type="submit"
                 variant="primary"
+                disabled={!lateRecordId || !formData.reason.trim() || formData.informed.length === 0}
                 fullWidth
                 leftIcon={<Plus className="w-4 h-4" />}
               >
-                Save Exemption
+                Submit for Approval
               </Button>
             </form>
           </Card>
@@ -269,7 +288,7 @@ export function Exemptions() {
                 }
                 description={
                   selectedMonth === "all"
-                    ? "Use the form on the left to add an approved exemption."
+                    ? "Use the form on the left to submit an exemption for approval."
                     : "Switch the filter or add an exemption from the form on the left."
                 }
                 bordered={false}
@@ -296,6 +315,11 @@ export function Exemptions() {
               <ul className="space-y-2">
                 {filteredExemptions.map((record) => {
                   const recordDate = getSafeDate(record.date);
+                  const reportedTime = formatOptionalReportedTime(record.time);
+                  const informedPeople = Array.isArray(record.informed)
+                    ? record.informed.filter((person) => typeof person === "string" && person.trim())
+                    : [];
+                  const hasOptionalDetails = Boolean(reportedTime || informedPeople.length > 0);
 
                   return (
                     <li
@@ -320,8 +344,8 @@ export function Exemptions() {
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
-                              <Badge tone="brand">Exempted</Badge>
-                              <Button
+                              <Badge tone={record.approvalStatus === "approved" ? "success" : record.approvalStatus === "declined" ? "danger" : "warning"}>{record.approvalStatus === "approved" ? "Approved" : record.approvalStatus === "declined" ? "Declined" : "Pending"}</Badge>
+                              {record.approvalStatus === "approved" && !record.lateRestoredAt && <Button
                                 variant="warning"
                                 size="sm"
                                 leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
@@ -333,8 +357,8 @@ export function Exemptions() {
                                   })
                                 }
                               >
-                                Restore
-                              </Button>
+                                Restore Late Record
+                              </Button>}
                               <Button
                                 variant="danger"
                                 size="sm"
@@ -358,6 +382,10 @@ export function Exemptions() {
                             </span>{" "}
                             {record.reason}
                           </div>
+                          <p className="mt-2 text-xs text-slate-500">Linked late: {record.lateTime || "Not recorded"} • {record.minutesLate ?? 0} minute(s)</p>
+                          {hasOptionalDetails && <p className="mt-2 text-xs text-slate-500">{reportedTime ? `Time: ${reportedTime}` : ""}{reportedTime && informedPeople.length > 0 ? " • " : ""}{informedPeople.length > 0 ? `Informed: ${informedPeople.join(", ")}` : ""}</p>}
+                          {record.reviewedAt && <p className="mt-2 text-xs text-slate-500">Reviewer: {record.reviewedBy ? "Admin" : "Not recorded"} • Reviewed: {new Date(record.reviewedAt).toLocaleString()} • Remarks: {record.reviewRemarks || "None"}</p>}
+                          {record.lateRestoredAt && <p className="mt-2 text-xs font-medium text-warning-700">Late Record Restored • {new Date(record.lateRestoredAt).toLocaleString()}</p>}
                         </div>
                       </div>
                     </li>
@@ -388,13 +416,12 @@ export function Exemptions() {
             <>
               <span className="font-semibold">{restoreTarget.name}</span> on{" "}
               {new Date(restoreTarget.date).toLocaleDateString("en-US")} will be
-              moved back to Late Records. The exemption row will be moved to
-              Trash and can be restored from the Recycle Bin.
+              counted in Late Records again. The approved exemption remains in Approval History.
             </>
           ) : null
         }
         confirmLabel="Restore Late"
-        onConfirm={handleRestoreConfirm}
+        onConfirm={() => void handleRestoreConfirm()}
         onCancel={() => setRestoreTarget(null)}
       />
 

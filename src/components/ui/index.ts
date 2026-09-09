@@ -3,6 +3,7 @@ export { Card, CardHeader } from "./Card";
 export { Badge } from "./Badge";
 export { Input } from "./Input";
 export { Select } from "./Select";
+export { SearchableCombobox } from "./SearchableCombobox";
 export { Textarea } from "./Textarea";
 export { EmptyState } from "./EmptyState";
 export { PageHeader } from "./PageHeader";
