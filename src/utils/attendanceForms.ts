@@ -52,3 +52,16 @@ export function generatedUndertimeMinutes(date: string, hours: number, minutes: 
 export function activeEmployeeOptions<T extends { fullName: string; employmentStatus: string; isDeleted: boolean }>(employees: T[]) {
   return employees.filter((employee) => employee.employmentStatus === "active" && !employee.isDeleted);
 }
+
+export function countUndertimeRecords(
+  employeeName: string,
+  generated: Array<{ name: string; isDeleted?: boolean }>,
+  manual: Array<{ name: string; isDeleted?: boolean }>,
+) {
+  const key = employeeName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  return [...generated, ...manual].filter(
+    (record) =>
+      !record.isDeleted &&
+      record.name.trim().toLocaleLowerCase().replace(/\s+/g, " ") === key,
+  ).length;
+}

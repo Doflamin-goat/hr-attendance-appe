@@ -35,6 +35,7 @@ import {
   type EmployeeInput,
   type Workspace,
 } from "../services/employeeService";
+import { countUndertimeRecords } from "../utils/attendanceForms";
 
 type StatusFilter = "active" | "inactive" | "all";
 type WorkspaceFilter = "all" | Workspace;
@@ -51,22 +52,13 @@ type EmployeeRow = {
   latesCount: number;
   absenceCount: number;
   lateExemptionsCount: number;
-  totalUndertime: number;
+  undertimeCount: number;
 };
 
 type ConfirmState =
   | { kind: "deactivate"; id: string; name: string }
   | { kind: "restore"; id: string; name: string }
   | null;
-
-function formatMinutes(minutes: number) {
-  if (!minutes || minutes <= 0) return "—";
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hrs > 0 && mins > 0) return `${hrs} hr ${mins} min`;
-  if (hrs > 0) return `${hrs} hr`;
-  return `${mins} min`;
-}
 
 function formatCount(value: number) {
   return value > 0 ? value : "—";
@@ -189,7 +181,7 @@ export default function EmployeesPage() {
         latesCount: 0,
         absenceCount: 0,
         lateExemptionsCount: 0,
-        totalUndertime: 0,
+        undertimeCount: countUndertimeRecords(emp.fullName, generatedUndertimes, manualUndertimes),
       });
     });
 
@@ -213,7 +205,7 @@ export default function EmployeesPage() {
           latesCount: 0,
           absenceCount: 0,
           lateExemptionsCount: 0,
-          totalUndertime: 0,
+          undertimeCount: 0,
         };
         map.set(key, row);
       }
@@ -238,15 +230,12 @@ export default function EmployeesPage() {
 
     generatedUndertimes.forEach((rec) => {
       const row = ensureUnregistered(rec.name);
-      if (row) row.totalUndertime += 1;
+      if (row && !row.employee) row.undertimeCount += 1;
     });
 
     manualUndertimes.forEach((rec) => {
       const row = ensureUnregistered(rec.name);
-      if (row) {
-        const hours = Number(rec.undertimeHours || 0);
-        row.totalUndertime += hours * 60;
-      }
+      if (row && !row.employee) row.undertimeCount += 1;
     });
 
     return Array.from(map.values()).sort((a, b) =>
@@ -422,7 +411,7 @@ export default function EmployeesPage() {
       key: "undertime",
       header: "Undertime",
       align: "right",
-      render: (row) => formatMinutes(row.totalUndertime),
+      render: (row) => formatCount(row.undertimeCount),
     },
     {
       key: "actions",

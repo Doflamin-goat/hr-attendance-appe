@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { canAccessPath } from "../src/utils/access.ts";
-import { activeEmployeeOptions, classifyGeneratedHalfDay, durationMinutes, formatDuration, formatTime12Hour, generatedUndertimeMinutes, halfDayRange } from "../src/utils/attendanceForms.ts";
+import { activeEmployeeOptions, classifyGeneratedHalfDay, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, generatedUndertimeMinutes, halfDayRange } from "../src/utils/attendanceForms.ts";
 import { LOGIN_ACCOUNTS } from "../src/utils/loginAccounts.ts";
 import { describeSubmitExemptionError, formatOptionalReportedTime, matchingLinkedLateRecords } from "../src/utils/exemptionForms.ts";
 
@@ -25,6 +25,18 @@ test("undertime duration must be positive and is formatted readably", () => {
   assert.equal(formatDuration(119), "1 hour 59 minutes");
   assert.equal(durationMinutes("15:00", "15:00"), 0);
   assert.equal(durationMinutes("15:01", "15:00"), 0);
+});
+
+test("Employees master list counts generated and manual undertime records", () => {
+  assert.equal(countUndertimeRecords("Cruz, Nathaniel Philip", [
+    { name: "Cruz, Nathaniel Philip" },
+    { name: "Cruz,  Nathaniel Philip" },
+    { name: "Other Employee" },
+  ], [
+    { name: "CRUZ, NATHANIEL PHILIP" },
+    { name: "Cruz, Nathaniel Philip", isDeleted: true },
+  ]), 3);
+  assert.equal(countUndertimeRecords("No Records", [], []), 0);
 });
 
 test("manual employee selectors only receive active employee records", () => {
