@@ -1,4 +1,48 @@
 export type HalfDayPeriod = "morning" | "afternoon";
+export type UploadedAttendanceClassification =
+  | { kind: "on_time" }
+  | { kind: "late"; minutes: number; seconds: number; totalSeconds: number }
+  | { kind: "undertime"; from: string; to: string; minutes: number }
+  | { kind: "half_day"; period: "morning"; scheduledStart: string; scheduledEnd: string }
+  | { kind: "unchanged" };
+
+export function classifyUploadedTimeIn(date: string, hours: number, minutes: number, seconds: number): UploadedAttendanceClassification {
+  const day = new Date(`${date}T00:00:00`).getDay();
+  const minuteOfDay = hours * 60 + minutes;
+  const secondOfDay = minuteOfDay * 60 + seconds;
+  const result = (startMinutes: number, graceEnd: number, lateEnd: number, morningEnd: number, halfStart: number, halfEnd: number, halfScheduleEnd: number, afternoonStart: number, shiftEnd: number) => {
+    if (minuteOfDay >= startMinutes && minuteOfDay <= graceEnd) return { kind: "on_time" } as const;
+    if (minuteOfDay > graceEnd && minuteOfDay <= lateEnd) {
+      const totalSeconds = secondOfDay - startMinutes * 60;
+      return { kind: "late", minutes: Math.floor(totalSeconds / 60), seconds: totalSeconds % 60, totalSeconds } as const;
+    }
+    if (minuteOfDay > lateEnd && minuteOfDay <= morningEnd) return { kind: "undertime", from: minutesToTime(startMinutes), to: minutesToTime(minuteOfDay), minutes: minuteOfDay - startMinutes } as const;
+    if (minuteOfDay >= halfStart && minuteOfDay <= halfEnd) return { kind: "half_day", period: "morning", scheduledStart: minutesToTime(startMinutes), scheduledEnd: minutesToTime(halfScheduleEnd) } as const;
+    if (minuteOfDay > halfEnd && minuteOfDay <= shiftEnd) return { kind: "undertime", from: minutesToTime(afternoonStart), to: minutesToTime(minuteOfDay), minutes: minuteOfDay - afternoonStart } as const;
+    return { kind: "unchanged" } as const;
+  };
+  if (day >= 1 && day <= 5) return result(480, 485, 539, 710, 711, 780, 720, 780, 1020);
+  if (day === 6) return result(420, 425, 479, 650, 651, 660, 660, 660, 915);
+  return { kind: "unchanged" };
+}
+
+function minutesToTime(value: number) {
+  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
+
+export function parseAttendanceDateTime(value: string | number | Date) {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 1) return null;
+    const wholeDays = Math.floor(value);
+    const dayFraction = value - wholeDays;
+    const utc = new Date(Date.UTC(1899, 11, 30 + wholeDays));
+    const seconds = Math.round(dayFraction * 86400);
+    return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(), Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60);
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 
 export function durationMinutes(from: string, to: string) {
   const toMinutes = (value: string) => {
@@ -30,23 +74,44 @@ export function formatTime12Hour(value: string) {
   return `${hour % 12 || 12}:${match[2]} ${hour >= 12 ? "PM" : "AM"}`;
 }
 
+export function formatTime12HourWithOptionalSeconds(value: string) {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(value);
+  if (!match) return value;
+  const hour = Number(match[1]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return value;
+  const seconds = match[3] && match[3] !== "00" ? `:${match[3]}` : "";
+  return `${hour % 12 || 12}:${match[2]}${seconds} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+export function halfDayMatchesScope(workDate: string, monthScope: string, dayScope: string) {
+  const normalized = workDate.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return false;
+  if (dayScope !== "all") return normalized === dayScope.slice(0, 10);
+  if (monthScope !== "all") return normalized.slice(0, 7) === monthScope;
+  return true;
+}
+
+export function attendanceRecordRange(date: string, timeIn: string) {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i.exec(timeIn.trim());
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] ?? 0);
+  const meridiem = match[4]?.toUpperCase();
+  if (meridiem === "PM" && hour < 12) hour += 12;
+  if (meridiem === "AM" && hour === 12) hour = 0;
+  const result = classifyUploadedTimeIn(date, hour, minute, second);
+  return result.kind === "undertime" ? result : null;
+}
+
 export function classifyGeneratedHalfDay(date: string, hours: number, minutes: number, seconds: number) {
-  const day = new Date(`${date}T00:00:00`).getDay();
-  if (day === 0) return null;
-  const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-  const start = day === 6 ? 11 * 3600 : 12 * 3600;
-  const end = day === 6 ? start : 13 * 3600;
-  if (totalSeconds < start || totalSeconds > end) return null;
-  const [scheduledStart, scheduledEnd] = halfDayRange(date, "afternoon")!;
-  return { period: "afternoon" as const, scheduledStart, scheduledEnd };
+  const result = classifyUploadedTimeIn(date, hours, minutes, seconds);
+  return result.kind === "half_day" ? { period: result.period, scheduledStart: result.scheduledStart, scheduledEnd: result.scheduledEnd } : null;
 }
 
 export function generatedUndertimeMinutes(date: string, hours: number, minutes: number, seconds: number) {
-  const day = new Date(`${date}T00:00:00`).getDay();
-  if (day === 0) return 0;
-  const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-  const threshold = day === 6 ? 11 * 3600 : 13 * 3600;
-  return totalSeconds > threshold ? Math.floor((totalSeconds - threshold) / 60) : 0;
+  const result = classifyUploadedTimeIn(date, hours, minutes, seconds);
+  return result.kind === "undertime" ? result.minutes : 0;
 }
 
 export function activeEmployeeOptions<T extends { fullName: string; employmentStatus: string; isDeleted: boolean }>(employees: T[]) {

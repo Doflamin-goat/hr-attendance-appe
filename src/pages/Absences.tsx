@@ -49,7 +49,8 @@ export function Absences() {
   } = useAttendance();
   const { activeEmployees } = useEmployees();
 
-  const [formData, setFormData] = useState({ employeeId: "", name: "", reason: "", date: "" });
+  const [formData, setFormData] = useState({ employeeId: "", name: "", reason: "", date: "", informed: [] as string[] });
+  const informedOptions = ["Sir Gatch", "Ma’am Chona", "HR Louissa"];
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -93,6 +94,7 @@ export function Absences() {
       name: formData.name.trim(),
       reason: formData.reason.trim(),
       date: formData.date,
+      informed: formData.informed,
     });
 
     setFeedback({
@@ -102,7 +104,7 @@ export function Absences() {
 
     if (result.success) {
       setSelectedMonth(getMonthKey(formData.date));
-      setFormData({ employeeId: "", name: "", reason: "", date: "" });
+      setFormData({ employeeId: "", name: "", reason: "", date: "", informed: [] });
     }
   };
 
@@ -175,6 +177,11 @@ export function Absences() {
                   setFormData({ ...formData, reason: e.target.value })
                 }
               />
+
+              <div>
+                <p className="text-sm font-medium text-slate-700">Informed to <span className="font-normal text-slate-400">(optional)</span></p>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+              </div>
 
               <Button
                 type="submit"
@@ -294,6 +301,7 @@ export function Absences() {
                         </span>{" "}
                         {record.reason}
                       </p>
+                      {Array.isArray(record.informed) && record.informed.length > 0 && <p className="mt-1 text-xs text-slate-500">Informed to: {record.informed.join(", ")}</p>}
                     </li>
                   ))}
                 </ul>

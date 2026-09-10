@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { canAccessPath } from "../src/utils/access.ts";
-import { activeEmployeeOptions, classifyGeneratedHalfDay, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, generatedUndertimeMinutes, halfDayRange } from "../src/utils/attendanceForms.ts";
+import { activeEmployeeOptions, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, parseAttendanceDateTime } from "../src/utils/attendanceForms.ts";
 import { LOGIN_ACCOUNTS } from "../src/utils/loginAccounts.ts";
 import { describeSubmitExemptionError, formatOptionalReportedTime, matchingLinkedLateRecords } from "../src/utils/exemptionForms.ts";
 
@@ -56,13 +56,17 @@ test("half-day ranges follow weekday and Saturday schedules", () => {
   assert.equal(halfDayRange("2026-09-13", "morning"), null);
 });
 
-test("generated attendance reclassifies Saturday 11:00 AM and weekday 12:00 PM as Half-Day", () => {
-  assert.deepEqual(classifyGeneratedHalfDay("2026-09-12", 11, 0, 0), { period: "afternoon", scheduledStart: "11:00", scheduledEnd: "15:15" });
-  assert.deepEqual(classifyGeneratedHalfDay("2026-09-07", 12, 0, 0), { period: "afternoon", scheduledStart: "13:00", scheduledEnd: "17:00" });
-  assert.equal(classifyGeneratedHalfDay("2026-09-12", 10, 59, 59), null);
-  assert.equal(classifyGeneratedHalfDay("2026-09-12", 11, 1, 0), null);
+test("uploaded weekday boundary classifications are mutually exclusive", () => {
+  const samples = [[8,5,"on_time"],[8,6,"late"],[8,59,"late"],[9,0,"undertime"],[9,3,"undertime"],[11,50,"undertime"],[11,51,"half_day"],[13,0,"half_day"],[13,1,"undertime"]] as const;
+  for (const [hour, minute, kind] of samples) assert.equal(classifyUploadedTimeIn("2026-09-07", hour, minute, 0).kind, kind);
+  assert.equal(generatedUndertimeMinutes("2026-09-07", 9, 3, 0), 63);
+  assert.deepEqual(classifyGeneratedHalfDay("2026-09-07", 11, 51, 0), { period: "morning", scheduledStart: "08:00", scheduledEnd: "12:00" });
+});
+
+test("uploaded Saturday boundary classifications are mutually exclusive", () => {
+  const samples = [[7,5,"on_time"],[7,6,"late"],[7,59,"late"],[8,0,"undertime"],[10,50,"undertime"],[10,51,"half_day"],[11,0,"half_day"],[11,1,"undertime"]] as const;
+  for (const [hour, minute, kind] of samples) assert.equal(classifyUploadedTimeIn("2026-09-12", hour, minute, 0).kind, kind);
   assert.equal(generatedUndertimeMinutes("2026-09-12", 11, 1, 0), 1);
-  assert.deepEqual(classifyGeneratedHalfDay("2026-09-07", 13, 0, 0), { period: "afternoon", scheduledStart: "13:00", scheduledEnd: "17:00" });
 });
 
 test("approval workflow rules keep pending and declined lates counted", () => {
@@ -157,7 +161,7 @@ test("production patch allows a WAIS employee to link the selected APP late whil
 test("generated Half-Day path prevents a duplicate generated undertime", () => {
   const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
   const migration = readFileSync(new URL("../supabase/migrations/009_production_global_exemption_and_generated_half_day.sql", import.meta.url), "utf8");
-  assert.match(context, /if \(generatedHalfDay\) \{[\s\S]*?\} else if \(isUndertime\)/);
+  assert.match(context, /if \(classification\.kind === "half_day"\) \{[\s\S]*?\} else if \(classification\.kind === "undertime"\)/);
   assert.match(migration, /update public\.generated_undertimes set is_deleted=true/);
 });
 
@@ -181,8 +185,167 @@ test("Cruz 2026-09-07 uploaded late remains selectable by its exact bigint ID", 
 
 test("rendered Submit button uses only visible exemption fields", () => {
   const page = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
-  assert.match(page, /disabled=\{!lateRecordId \|\| !formData\.reason\.trim\(\) \|\| formData\.informed\.length === 0\}/);
+  assert.match(page, /disabled=\{!lateRecordId \|\| !formData\.reason\.trim\(\)\}/);
   assert.doesNotMatch(page, /disabled=\{[^}]*resolvedEmployeeId/);
+});
+
+test("optional informed people and exact manual-undertime source linkage are preserved", () => {
+  const absence = readFileSync(new URL("../src/pages/Absences.tsx", import.meta.url), "utf8");
+  const undertime = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  assert.match(absence, /Informed to[\s\S]*?\(optional\)/);
+  assert.match(undertime, /Matching Attendance Record/);
+  assert.match(undertime, /sourceLateRecordId: sourceRecordId/);
+  assert.match(undertime, /Informed to[\s\S]*?\(optional\)/);
+  assert.deepEqual(attendanceRecordRange("2026-09-07", "9:03:00 AM"), { kind: "undertime", from: "08:00", to: "09:03", minutes: 63 });
+});
+
+test("Excel serial dates are parsed as calendar dates instead of JavaScript milliseconds", () => {
+  const excelSerial = (Date.UTC(2026, 2, 5, 9, 3) - Date.UTC(1899, 11, 30)) / 86400000;
+  const parsed = parseAttendanceDateTime(excelSerial)!;
+  assert.equal(`${parsed.getFullYear()}-${String(parsed.getMonth()+1).padStart(2,"0")}-${String(parsed.getDate()).padStart(2,"0")}`, "2026-03-05");
+  assert.equal(parsed.getHours(), 9);
+  assert.equal(parsed.getMinutes(), 3);
+});
+
+test("Saved Half-Days distinguish manual and uploaded sources", () => {
+  const page = readFileSync(new URL("../src/pages/HalfDay.tsx", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/012_optional_informed_and_half_day_sources.sql", import.meta.url), "utf8");
+  assert.match(page, /System Generated/);
+  assert.match(page, /Manual/);
+  assert.match(migration, /source_type='attendance_upload'/);
+  assert.match(migration, /'manual'/);
+});
+
+test("migration 013 targets only active upload-derived weekday legacy undertime boundaries", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/013_reclassify_legacy_weekday_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /where not u\.is_deleted/);
+  assert.match(migration, /u\.source_file_id is not null/);
+  assert.match(migration, /extract\(isodow from u\.work_date\) between 1 and 5/);
+  assert.match(migration, /between time '11:51:00' and time '13:00:59\.999999'/);
+  assert.match(migration, /'morning'/);
+  assert.match(migration, /time '08:00'/);
+  assert.match(migration, /time '12:00'/);
+  assert.doesNotMatch(migration, /manual_undertimes/);
+});
+
+test("migration 013 creates the linked Half-Day before soft-deleting its exact generated undertime and is rerunnable", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/013_reclassify_legacy_weekday_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /source_generated_undertime_id/);
+  assert.match(migration, /create unique index if not exists half_day_source_generated_undertime_uidx/);
+  assert.match(migration, /on conflict \(employee_id, work_date, absent_period\) do update/);
+  assert.match(migration, /update public\.generated_undertimes u[\s\S]*?h\.source_generated_undertime_id = u\.id::text/);
+  assert.match(migration, /set is_deleted = true/);
+});
+
+test("generated undertime loader excludes rows linked to an active generated Half-Day", () => {
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(service, /from\("half_day_records"\)[\s\S]*?select\("source_generated_undertime_id"\)[\s\S]*?eq\("source_type", "attendance_upload"\)[\s\S]*?eq\("is_deleted", false\)/);
+  assert.match(service, /generatedHalfDaySourceIds\.has\(rowId\(record\.id\)\)\) return/);
+});
+
+test("Half-Day records follow the shared all, month, and exact-date scope", () => {
+  assert.equal(halfDayMatchesScope("2026-09-07", "all", "all"), true);
+  assert.equal(halfDayMatchesScope("2026-09-07", "2026-09", "all"), true);
+  assert.equal(halfDayMatchesScope("2026-09-07", "2026-08", "all"), false);
+  assert.equal(halfDayMatchesScope("2026-09-07", "2026-08", "2026-09-07"), true);
+  assert.equal(halfDayMatchesScope("2026-09-07", "2026-09", "2026-09-08"), false);
+});
+
+test("Half-Day tabs separate system and manual records and system cards show Time In", () => {
+  const page = readFileSync(new URL("../src/pages/HalfDay.tsx", import.meta.url), "utf8");
+  assert.match(page, /record\.sourceType === "attendance_upload"/);
+  assert.match(page, /record\.sourceType === "manual"/);
+  assert.match(page, />Time In</);
+  assert.match(page, /formatTime12HourWithOptionalSeconds\(record\.sourceTimeIn\)/);
+  assert.match(page, /createStagedHalfDay/);
+  assert.match(page, /deleteStagedHalfDay/);
+  assert.equal(formatTime12HourWithOptionalSeconds("12:37:33"), "12:37:33 PM");
+  assert.equal(formatTime12HourWithOptionalSeconds("12:37:00"), "12:37 PM");
+});
+
+test("migration 014 repairs only linked weekday generated undertimes and is idempotent", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/014_fix_generated_half_day_exclusivity.sql", import.meta.url), "utf8");
+  assert.match(migration, /where not u\.is_deleted/);
+  assert.match(migration, /extract\(isodow from u\.work_date\) between 1 and 5/);
+  assert.match(migration, /between time '11:51:00' and time '13:00:59\.999999'/);
+  assert.match(migration, /h\.source_generated_undertime_id = u\.id::text/);
+  assert.match(migration, /h\.source_time_in = u\.time_in::time/);
+  assert.match(migration, /deleted_reason = 'reclassified_as_half_day'/);
+  assert.doesNotMatch(migration, /update public\.manual_undertimes|insert into public\.half_day_records/);
+  assert.match(migration, /READ-ONLY PREFLIGHT/);
+  assert.match(migration, /READ-ONLY VERIFICATION/);
+});
+
+test("Saturday generated undertime remains outside migration 014", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/014_fix_generated_half_day_exclusivity.sql", import.meta.url), "utf8");
+  assert.doesNotMatch(migration, /extract\(isodow from u\.work_date\) between 1 and 6/);
+  assert.equal(generatedUndertimeMinutes("2026-09-12", 11, 1, 0), 1);
+});
+
+test("migration 015 repairs an inactive employee historical weekday upload", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/015_repair_missing_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /join public\.employees e[\s\S]*?not e\.is_deleted/);
+  assert.doesNotMatch(migration, /e\.employment_status\s*=\s*'active'/);
+  assert.match(migration, /time '08:00', time '12:00'/);
+  assert.match(migration, /'attendance_upload'/);
+  assert.match(migration, /source_generated_undertime_id/);
+});
+
+test("migration 015 retires only its exact generated Undertime after Half-Day creation", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/015_repair_missing_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /insert into public\.half_day_records[\s\S]*?update public\.generated_undertimes u/);
+  assert.match(migration, /h\.source_generated_undertime_id = u\.id::text/);
+  assert.match(migration, /deleted_reason = 'reclassified_as_half_day'/);
+  assert.doesNotMatch(migration, /update public\.manual_undertimes|update public\.late_records/);
+});
+
+test("migration 015 is idempotent and does not overwrite an active Manual Half-Day", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/015_repair_missing_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /not exists \([\s\S]*?h\.source_type = 'attendance_upload'/);
+  assert.match(migration, /not exists \([\s\S]*?h\.source_type = 'manual'/);
+  assert.match(migration, /on conflict \(employee_id, work_date, absent_period\) do update/);
+  assert.match(migration, /where public\.half_day_records\.source_type = 'attendance_upload'/);
+});
+
+test("migration 015 excludes Saturday records", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/015_repair_missing_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /extract\(isodow from u\.work_date\) between 1 and 5/);
+  assert.doesNotMatch(migration, /between 1 and 6/);
+  assert.equal(generatedUndertimeMinutes("2026-09-12", 13, 43, 47), 163);
+});
+
+test("migration 016 links APP attendance to one globally matched WAIS employee", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/016_repair_cross_workspace_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /public\.employee_name_key\(e\.full_name\) = public\.employee_name_key\(u\.employee_name\)/);
+  assert.doesNotMatch(migration, /e\.workspace\s*=\s*u\.workspace/);
+  assert.match(migration, /having count\(e\.id\) = 1/);
+  assert.match(migration, /select\s+c\.workspace,c\.employee_id,c\.employee_name/);
+  assert.match(migration, /c\.generated_undertime_id::text/);
+});
+
+test("migration 016 creates one generated Half-Day before retiring the exact source Undertime", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/016_repair_cross_workspace_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /insert into public\.half_day_records[\s\S]*?update public\.generated_undertimes u/);
+  assert.match(migration, /'morning',[\s\S]*?time '08:00',time '12:00'/);
+  assert.match(migration, /u\.id::text in \([\s\S]*?from inserted i/);
+  assert.match(migration, /deleted_reason='reclassified_as_half_day'/);
+  assert.match(migration, /on conflict \(employee_id,work_date,absent_period\) do update/);
+});
+
+test("migration 016 skips ambiguous employees and preserves Manual Half-Days", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/016_repair_cross_workspace_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /AMBIGUOUS-NAME DIAGNOSTIC/);
+  assert.match(migration, /having count\(e\.id\)>1/);
+  assert.match(migration, /not exists \([\s\S]*?h\.source_type = 'manual'/);
+  assert.match(migration, /where public\.half_day_records\.source_type='attendance_upload'/);
+});
+
+test("migration 016 excludes Saturday, March, Manual Undertimes, and Late Records", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/016_repair_cross_workspace_generated_half_days.sql", import.meta.url), "utf8");
+  assert.match(migration, /extract\(isodow from u\.work_date\) between 1 and 5/);
+  assert.match(migration, /u\.work_date not between date '2026-03-01' and date '2026-03-31'/);
+  assert.doesNotMatch(migration, /update public\.manual_undertimes|update public\.late_records/);
+  assert.equal(generatedUndertimeMinutes("2026-09-12", 13, 43, 47), 163);
 });
 
 test("production patch keeps Admin employee access read-only while HR remains the employee writer", () => {

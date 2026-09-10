@@ -215,6 +215,7 @@ export async function loadAttendanceData(workspace: Workspace) {
     uploadedFilesResult,
     lateRecordsResult,
     generatedUndertimesResult,
+    generatedHalfDaysResult,
     exemptionsResult,
     absencesResult,
     manualUndertimesResult,
@@ -234,6 +235,12 @@ export async function loadAttendanceData(workspace: Workspace) {
       .from("generated_undertimes")
       .select("*")
       .eq("workspace", workspace)
+      .eq("is_deleted", false),
+    supabase
+      .from("half_day_records")
+      .select("source_generated_undertime_id")
+      .eq("workspace", workspace)
+      .eq("source_type", "attendance_upload")
       .eq("is_deleted", false),
     supabase
       .from("exemptions")
@@ -260,6 +267,7 @@ export async function loadAttendanceData(workspace: Workspace) {
   if (uploadedFilesResult.error) throw uploadedFilesResult.error;
   if (lateRecordsResult.error) throw lateRecordsResult.error;
   if (generatedUndertimesResult.error) throw generatedUndertimesResult.error;
+  if (generatedHalfDaysResult.error) throw generatedHalfDaysResult.error;
   if (exemptionsResult.error) throw exemptionsResult.error;
   if (absencesResult.error) throw absencesResult.error;
   if (manualUndertimesResult.error) throw manualUndertimesResult.error;
@@ -304,7 +312,10 @@ export async function loadAttendanceData(workspace: Workspace) {
     }
   });
 
+  const generatedHalfDaySourceIds = new Set((generatedHalfDaysResult.data ?? []).map((record) => rowId(record.source_generated_undertime_id)).filter(Boolean));
+
   (generatedUndertimesResult.data ?? []).forEach((record) => {
+    if (generatedHalfDaySourceIds.has(rowId(record.id))) return;
     const sourceFileId = rowId(record.source_file_id);
 
     const mappedRecord: GeneratedUndertime = {
@@ -360,6 +371,7 @@ export async function loadAttendanceData(workspace: Workspace) {
     name: item.employee_name,
     date: toDisplayDate(item.work_date),
     reason: item.reason,
+    informed: normalizeTextList(item.informed_to),
   }));
 
   const manualUndertimes: UndertimeRecord[] = (
@@ -662,11 +674,16 @@ export async function createStagedHalfDay(input: { employeeId: string; date: str
 export type StagedHalfDayRecord = {
   id: string;
   employeeId: string;
+  employeeName: string;
   workDate: string;
   absentPeriod: "morning" | "afternoon";
   scheduledStart: string;
   scheduledEnd: string;
   reason: string;
+  sourceType: "attendance_upload" | "manual";
+  sourceFileName: string | null;
+  sourceTimeIn: string | null;
+  sourceGeneratedUndertimeId: string | null;
 };
 
 export async function restoreApprovedExemptionLate(id: string) {
@@ -679,18 +696,23 @@ export async function loadStagedHalfDays(): Promise<StagedHalfDayRecord[]> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase
     .from("half_day_records")
-    .select("id, employee_id, work_date, absent_period, scheduled_start, scheduled_end, reason")
+    .select("id, employee_id, employee_name, work_date, absent_period, scheduled_start, scheduled_end, reason, source_type, source_file_name, source_time_in, source_generated_undertime_id")
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []).map((item) => ({
     id: String(item.id),
     employeeId: String(item.employee_id),
+    employeeName: String(item.employee_name),
     workDate: String(item.work_date),
     absentPeriod: item.absent_period as "morning" | "afternoon",
     scheduledStart: String(item.scheduled_start),
     scheduledEnd: String(item.scheduled_end),
     reason: String(item.reason),
+    sourceType: item.source_type === "attendance_upload" ? "attendance_upload" : "manual",
+    sourceFileName: item.source_file_name == null ? null : String(item.source_file_name),
+    sourceTimeIn: item.source_time_in == null ? null : String(item.source_time_in),
+    sourceGeneratedUndertimeId: item.source_generated_undertime_id == null ? null : String(item.source_generated_undertime_id),
   }));
 }
 
@@ -708,6 +730,7 @@ export async function saveAbsenceRecord(workspace: Workspace, absence: AbsentRec
     employee_name: absence.name,
     work_date: toDbDate(absence.date),
     reason: absence.reason,
+    informed_to: absence.informed ?? [],
   });
 
   if (error) throw error;

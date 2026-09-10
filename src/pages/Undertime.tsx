@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
-import { durationMinutes, formatDuration } from "../utils/attendanceForms";
+import { attendanceRecordRange, durationMinutes, formatDuration, formatTime12Hour } from "../utils/attendanceForms";
 import {
   Clock3,
   Plus,
@@ -46,6 +46,7 @@ export function Undertime() {
   const {
     loading,
     generatedUndertimes,
+    allLateRecords,
     manualUndertimes,
     addUndertime,
     deleteManualUndertimesByMonth,
@@ -62,6 +63,7 @@ export function Undertime() {
   const [fromTime, setFromTime] = useState("");
   const [toTime, setToTime] = useState("");
   const [reason, setReason] = useState("");
+  const [sourceRecordId, setSourceRecordId] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("all");
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
@@ -71,6 +73,12 @@ export function Undertime() {
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const calculatedDuration = useMemo(() => durationMinutes(fromTime, toTime), [fromTime, toTime]);
+  const matchingAttendanceRecords = useMemo(() => allLateRecords.filter((record) => {
+    const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+    const recordDate = record.workDate ?? new Date(record.date).toLocaleDateString("en-CA");
+    const alreadyGenerated = generatedUndertimes.some((generated) => normalize(generated.name) === normalize(record.name) && generated.date === record.date && generated.timeIn === record.timeIn);
+    return record.sourceType !== "manual-entry" && !record.isDeleted && !alreadyGenerated && normalize(record.name) === normalize(employeeName) && recordDate === date && Boolean(attendanceRecordRange(date, record.timeIn));
+  }), [allLateRecords, generatedUndertimes, employeeName, date]);
   const informedOptions = ["Sir Gatch", "Ma’am Chona", "HR Louissa"];
 
   const monthOptions = useMemo(() => {
@@ -98,6 +106,7 @@ export function Undertime() {
     if (
       !employeeId ||
       !date ||
+      !sourceRecordId ||
       !fromTime.trim() ||
       !toTime.trim() ||
       !reason.trim()
@@ -121,6 +130,8 @@ export function Undertime() {
       reason: reason.trim(),
       undertimeHours,
       informed,
+      sourceLateRecordId: sourceRecordId,
+      originalTimeIn: matchingAttendanceRecords.find((record) => record.id === sourceRecordId)?.timeIn,
     });
 
     setFeedback({
@@ -136,6 +147,7 @@ export function Undertime() {
       setToTime("");
       setReason("");
       setInformed([]);
+      setSourceRecordId("");
       setSelectedMonth(getMonthKey(date));
     }
   };
@@ -268,14 +280,25 @@ export function Undertime() {
             />
 
             <div className="space-y-4 mt-5">
-              <SearchableCombobox label="Employee Name" value={employeeName} placeholder="Search active employees" options={activeEmployees.map((employee) => ({ id: employee.id, label: employee.fullName }))} onClear={() => { setEmployeeId(""); setEmployeeName(""); }} onSelect={(employee) => { setEmployeeId(employee.id); setEmployeeName(employee.label); }} />
+              <SearchableCombobox label="Employee Name" value={employeeName} placeholder="Search active employees" options={activeEmployees.map((employee) => ({ id: employee.id, label: employee.fullName }))} onClear={() => { setEmployeeId(""); setEmployeeName(""); setSourceRecordId(""); }} onSelect={(employee) => { setEmployeeId(employee.id); setEmployeeName(employee.label); setSourceRecordId(""); }} />
 
               <Input
                 label="Date"
                 type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={(e) => { setDate(e.target.value); setSourceRecordId(""); }}
               />
+
+              <Select label="Matching Attendance Record" value={sourceRecordId} disabled={!employeeId || !date || matchingAttendanceRecords.length === 0} onChange={(event) => {
+                const id = event.target.value;
+                setSourceRecordId(id);
+                const record = matchingAttendanceRecords.find((item) => item.id === id);
+                const range = record ? attendanceRecordRange(date, record.timeIn) : null;
+                if (range) { setFromTime(range.from); setToTime(range.to); }
+              }}>
+                <option value="">{matchingAttendanceRecords.length ? "Select matching attendance" : "No eligible attendance record"}</option>
+                {matchingAttendanceRecords.map((record) => { const range = attendanceRecordRange(date, record.timeIn)!; return <option key={record.id} value={record.id}>{formatTime12Hour(range.from)} – {formatTime12Hour(range.to)} · {formatDuration(range.minutes)}</option>; })}
+              </Select>
 
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-1.5">
@@ -303,7 +326,7 @@ export function Undertime() {
               />
 
               <div>
-                <p className="text-sm font-medium text-slate-700">Informed to</p>
+                <p className="text-sm font-medium text-slate-700">Informed to <span className="font-normal text-slate-400">(optional)</span></p>
                 <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
               </div>
 

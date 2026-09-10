@@ -40,7 +40,7 @@ import {
   softDeleteManualLateRecord,
 } from "../services/manualLateService";
 import { computeManualLate } from "../utils/manualLate";
-import { classifyGeneratedHalfDay, generatedUndertimeMinutes } from "../utils/attendanceForms";
+import { classifyUploadedTimeIn, parseAttendanceDateTime } from "../utils/attendanceForms";
 import { toast } from "../components/ui";
 
 
@@ -95,7 +95,7 @@ export interface GeneratedUndertime {
 export interface GeneratedHalfDay {
   name: string;
   date: string;
-  period: "afternoon";
+  period: "morning" | "afternoon";
   scheduledStart: string;
   scheduledEnd: string;
   reason: string;
@@ -125,6 +125,7 @@ export interface AbsentRecord {
   name: string;
   date: string;
   reason: string;
+  informed?: string[];
 }
 
 export interface UndertimeRecord {
@@ -732,86 +733,32 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
               if (!row?.[2] || !row?.[4]) continue;
 
               const name = String(row[2]).trim();
-              const dateTime = new Date(row[4] as string | number | Date);
+              const dateTime = parseAttendanceDateTime(row[4] as string | number | Date);
 
-              if (!name || Number.isNaN(dateTime.getTime())) continue;
+              if (!name || !dateTime) continue;
 
-              const dayOfWeek = dateTime.getDay();
               const hours = dateTime.getHours();
               const minutes = dateTime.getMinutes();
               const seconds = dateTime.getSeconds();
-              const totalSeconds = hours * 3600 + minutes * 60 + seconds;
               const workDate = `${dateTime.getFullYear()}-${String(dateTime.getMonth() + 1).padStart(2, "0")}-${String(dateTime.getDate()).padStart(2, "0")}`;
 
-              let isLate = false;
-              let isUndertime = false;
-              const generatedHalfDay = classifyGeneratedHalfDay(
-                workDate,
-                hours,
-                minutes,
-                seconds
-              );
-              let minutesLate = 0;
-              let secondsLate = 0;
-              let totalSecondsLateValue = 0;
-
-              if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-                const officialTime = 8 * 3600;
-                const lateStart = 8 * 3600 + 6 * 60;
-
-                const exactHourUndertime =
-                  minutes === 0 &&
-                  seconds === 0 &&
-                  (hours === 9 || hours === 10 || hours === 11);
-
-                const afternoonUndertime =
-                  totalSeconds > 13 * 3600 && totalSeconds <= 17 * 3600;
-
-                if (!generatedHalfDay && (exactHourUndertime || afternoonUndertime)) {
-                  isUndertime = true;
-                } else if (totalSeconds >= lateStart) {
-                  isLate = true;
-                  totalSecondsLateValue = totalSeconds - officialTime;
-                  minutesLate = Math.floor(totalSecondsLateValue / 60);
-                  secondsLate = totalSecondsLateValue % 60;
-                }
-              } else if (dayOfWeek === 6) {
-                const officialTime = 7 * 3600;
-                const lateStart = 7 * 3600 + 6 * 60;
-
-                const exactHourUndertime =
-                  minutes === 0 &&
-                  seconds === 0 &&
-                  (hours === 8 || hours === 9 || hours === 10 || hours === 11);
-
-                const afternoonUndertime =
-                  totalSeconds > 11 * 3600 && totalSeconds <= 15 * 3600;
-
-                if (!generatedHalfDay && (exactHourUndertime || afternoonUndertime)) {
-                  isUndertime = true;
-                } else if (totalSeconds >= lateStart) {
-                  isLate = true;
-                  totalSecondsLateValue = totalSeconds - officialTime;
-                  minutesLate = Math.floor(totalSecondsLateValue / 60);
-                  secondsLate = totalSecondsLateValue % 60;
-                }
-              }
+              const classification = classifyUploadedTimeIn(workDate, hours, minutes, seconds);
 
               const timeIn = dateTime.toLocaleTimeString("en-US");
               const dateStr = dateTime.toLocaleDateString("en-US");
               const recordKey = makeRecordKey(name, dateStr, timeIn);
 
-              if (generatedHalfDay) {
+              if (classification.kind === "half_day") {
                 parsedGeneratedHalfDays.push({
                   name,
                   date: dateStr,
-                  period: generatedHalfDay.period,
-                  scheduledStart: generatedHalfDay.scheduledStart,
-                  scheduledEnd: generatedHalfDay.scheduledEnd,
+                  period: classification.period,
+                  scheduledStart: classification.scheduledStart,
+                  scheduledEnd: classification.scheduledEnd,
                   reason: "Generated from attendance upload",
                   sourceFileName: file.name,
                 });
-              } else if (isUndertime) {
+              } else if (classification.kind === "undertime") {
                 if (!allExistingUndertimeKeys.has(recordKey)) {
                   allExistingUndertimeKeys.add(recordKey);
                   parsedGeneratedUndertime.push({
@@ -819,12 +766,12 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                     name,
                     date: dateStr,
                     timeIn,
-                    minutesUndertime: generatedUndertimeMinutes(workDate, hours, minutes, seconds),
+                    minutesUndertime: classification.minutes,
                     sourceFileId: newFileId,
                     sourceFileName: file.name,
                   });
                 }
-              } else if (isLate) {
+              } else if (classification.kind === "late") {
                 if (!allExistingLateKeys.has(recordKey)) {
                   allExistingLateKeys.add(recordKey);
                   parsedLateRecords.push({
@@ -832,9 +779,9 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                     name,
                     date: dateStr,
                     timeIn,
-                    minutesLate,
-                    secondsLate,
-                    totalSecondsLate: totalSecondsLateValue,
+                    minutesLate: classification.minutes,
+                    secondsLate: classification.seconds,
+                    totalSecondsLate: classification.totalSeconds,
                     sourceFileId: newFileId,
                     sourceFileName: file.name,
                   });
@@ -977,6 +924,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
         message:
           "No matching late record found for this employee and date. Manual undertime will only offset a late record if name and date match.",
       };
+    }
+
+    if (!ut.sourceLateRecordId || !matchingLateRecords.some((record) => record.id === ut.sourceLateRecordId)) {
+      return { success: false, message: "Select the exact matching attendance record before saving undertime." };
     }
 
 

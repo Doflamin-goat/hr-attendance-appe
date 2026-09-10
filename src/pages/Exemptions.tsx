@@ -209,7 +209,7 @@ export function Exemptions() {
               <Input label="Time (optional)" type="time" value={formData.time} onChange={(e) => setFormData({ ...formData, time: e.target.value })} />
 
               <fieldset>
-                <legend className="text-sm font-medium text-slate-700">Who was informed</legend>
+                <legend className="text-sm font-medium text-slate-700">Who was informed <span className="font-normal text-slate-400">(optional)</span></legend>
                 <div className="mt-2 space-y-2"><SearchableCombobox label="Informed to" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
               </fieldset>
 
@@ -227,7 +227,7 @@ export function Exemptions() {
               <Button
                 type="submit"
                 variant="primary"
-                disabled={!lateRecordId || !formData.reason.trim() || formData.informed.length === 0}
+                disabled={!lateRecordId || !formData.reason.trim()}
                 fullWidth
                 leftIcon={<Plus className="w-4 h-4" />}
               >
