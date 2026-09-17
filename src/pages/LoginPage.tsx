@@ -210,7 +210,7 @@ export default function LoginPage() {
                 </div>
                 <div>
                   <p className="text-[18px] font-bold leading-tight tracking-tight text-slate-950">
-                    WATTS App TimeCore
+                    WATTS APP 
                   </p>
                   <p className="mt-1 text-[12px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                     HR Attendance System
@@ -266,7 +266,7 @@ export default function LoginPage() {
                 </div>
                 <div>
                   <p className="text-[16px] font-bold leading-tight text-slate-900">
-                    WATTS App TimeCore
+                    WATTS APP 
                   </p>
                   <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                     HR Attendance System

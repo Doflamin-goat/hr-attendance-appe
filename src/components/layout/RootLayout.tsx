@@ -85,7 +85,7 @@ function SidebarContent({
         </div>
         <div className="min-w-0">
           <p className="text-[15px] font-bold text-slate-900 leading-tight">
-            TimeCore
+            WATTS APP
           </p>
           <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">
             HR Attendance

@@ -1815,7 +1815,7 @@ const getTeam = (name: string) => {
 
     setupSheet(
       lateSheet,
-      "TIMECORE HR ATTENDANCE REPORT",
+      "WATTS APP HR ATTENDANCE REPORT",
       `Late Summary / Late Records / Exemptions  |  Report Scope: ${reportScope}  |  Generated: ${generatedDate}`
     );
 
@@ -1901,7 +1901,7 @@ const getTeam = (name: string) => {
 
     setupSheet(
       absenceSheet,
-      "TIMECORE HR ATTENDANCE REPORT",
+      "WATTS APP HR ATTENDANCE REPORT",
       `Absence and Undertime Monitoring  |  Report Scope: ${reportScope}  |  Generated: ${generatedDate}`
     );
 
@@ -1987,7 +1987,7 @@ const getTeam = (name: string) => {
       ]
     );
 
-    workbook.creator = "TimeCore HR Attendance System";
+    workbook.creator = "WATTS APP HR Attendance System";
     workbook.created = new Date();
     workbook.modified = new Date();
 
