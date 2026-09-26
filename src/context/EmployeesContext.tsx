@@ -41,7 +41,7 @@ interface EmployeesState {
 const EmployeesContext = createContext<EmployeesState | undefined>(undefined);
 
 export function EmployeesProvider({ children }: { children: ReactNode }) {
-  const { user, email, loading: authLoading } = useAuth();
+  const { user, email, hrScope, loading: authLoading } = useAuth();
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,7 +57,8 @@ export function EmployeesProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      const data = await listEmployees();
+      if (!hrScope) { setEmployees([]); return; }
+      const data = await listEmployees(hrScope);
       setEmployees(data);
     } catch (err) {
       console.error("Failed to load employees:", err);
@@ -66,17 +67,17 @@ export function EmployeesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hrScope]);
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!user || !hrScope) {
       setEmployees([]);
       setLoading(false);
       return;
     }
     void refresh();
-  }, [authLoading, user, refresh]);
+  }, [authLoading, user, hrScope, refresh]);
 
   const addEmployee = useCallback(
     async (input: EmployeeInput) => {
@@ -145,8 +146,8 @@ export function EmployeesProvider({ children }: { children: ReactNode }) {
 
       active.push(emp);
 
-      if (emp.workspace === "APP") app += 1;
-      else if (emp.workspace === "WAIS") wais += 1;
+      if (emp.employer === "APP" || emp.employer === "WATTS APP") app += 1;
+      else if (emp.employer === "WAIS" || emp.employer === "M2B") wais += 1;
     });
 
     return {

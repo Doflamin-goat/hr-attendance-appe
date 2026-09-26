@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAttendance, type LateRecord } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
+import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { computeManualLate } from "../utils/manualLate";
 import {
   PageHeader,
@@ -34,14 +35,6 @@ function getDefaultUndertimeStart(dateValue: string) {
 
 function getDefaultUndertimeRange(record: LateRecord) {
   return `${getDefaultUndertimeStart(record.date)} to ${record.timeIn}`;
-}
-
-function Avatar({ name }: { name: string }) {
-  return (
-    <div className="w-9 h-9 rounded-full bg-brand-50 text-brand-700 flex items-center justify-center font-semibold text-xs uppercase border border-brand-100 flex-shrink-0">
-      {name.substring(0, 2)}
-    </div>
-  );
 }
 
 export function LateRecords() {
@@ -132,7 +125,7 @@ export function LateRecords() {
     setFeedback(null);
   };
 
-  const handleConfirmUndertime = () => {
+  const handleConfirmUndertime = async () => {
     if (!selectedLateRecord) return;
 
     const hasManualInput = manualFromTime.trim() || manualToTime.trim();
@@ -149,7 +142,7 @@ export function LateRecords() {
       ? `${manualFromTime.trim()} to ${manualToTime.trim()} ${manualPeriod}`
       : getDefaultUndertimeRange(selectedLateRecord);
 
-    const result = convertLateToUndertime({
+    const result = await convertLateToUndertime({
       lateRecordId: selectedLateRecord.id,
       undertimeHours,
       isManualOverride: Boolean(hasManualInput),
@@ -170,7 +163,7 @@ export function LateRecords() {
       header: "Employee",
       render: (record) => (
         <div className="flex items-center gap-3 min-w-0">
-          <Avatar name={record.name} />
+          <EmployeeAvatar name={record.name} />
           <span className="font-medium text-slate-900 truncate">
             {record.name}
           </span>
@@ -239,11 +232,12 @@ export function LateRecords() {
     },
   ];
 
-  const handleConfirmDeleteManualLate = () => {
+  const handleConfirmDeleteManualLate = async () => {
     if (!deleteTarget) return;
     const target = deleteTarget;
+    const result = await deleteManualLate(target.id);
+    if (!result.success) { toast.error("Delete failed", result.message); return; }
     setDeleteTarget(null);
-    deleteManualLate(target.id);
     toast.success(
       "Manual late moved to Trash",
       `${target.name} on ${target.date} at ${target.timeIn} was moved to the Recycle Bin.`
@@ -387,7 +381,7 @@ export function LateRecords() {
                 className="bg-white rounded-lg border border-slate-200 p-4 hover:border-slate-300 hover:shadow-[0_4px_14px_rgba(15,23,42,0.06)] transition-all duration-200"
               >
                 <div className="flex justify-between items-start mb-3">
-                  <Avatar name={item.name} />
+                  <EmployeeAvatar name={item.name} />
                   <Badge tone="danger">{item.totalLates} lates</Badge>
                 </div>
                 <h3 className="font-semibold text-slate-900 truncate">

@@ -1,73 +1,134 @@
-# React + TypeScript + Vite
+# WATTS APP
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+WATTS APP is an internal HR Attendance Management System for APP Electric Corporation used to manage employee attendance, attendance exceptions, absences, leave, approvals, employee records, and HR reporting across APP and WAIS employees.
 
-Currently, two official plugins are available:
+## Overview
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The application centralizes attendance operations for APP Electric Corporation. It supports APP and WAIS employee records and separates HR data-entry workflows from Admin review workflows through role-based access.
 
-## React Compiler
+Public information pages provide a concise About overview, Privacy Policy, and administrator Contact guidance without exposing private contact details.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Features
 
-## Expanding the ESLint configuration
+### HR
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- Attendance dashboard with date and month scopes
+- Employee Master for APP and WAIS employees
+- Excel attendance upload and uploaded-file history
+- Late Records and manual late entry
+- Exemption submission and history
+- Absence entry, filtering, and record history
+- Leave requests, Annual Leave Registry, Remaining Leave management, and leave history
+- Manual and generated Undertime records
+- Manual and attendance-generated Half-Day records
+- Recycle Bin and supported record restoration
+- Excel exports and attendance reports
+- Memo alerts and approval notifications
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### Admin
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- Attendance dashboard and employee visibility
+- Pending Exemption review with Approve and Decline actions
+- Searchable Exemption Approval History
+- Leave approval and rejection
+- Read-only Annual Leave Registry and leave history
+- Read-only Absence Records
+- Pending approval and decision notifications
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Access is role-based so HR maintenance actions and Admin approval actions remain intentionally separated.
+
+## Leave Management
+
+- Annual entitlement is 5 days or 40 working hours.
+- HR submits leave requests for Admin approval.
+- Pending leave does not deduct from the available balance.
+- Approved leave deducts from the balance.
+- Rejected and cancelled leave does not deduct from the balance.
+- HR can maintain an employee's current Remaining Leave for a selected calendar year.
+- Leave history and adjustment activity are retained for operational tracking and audit purposes.
+
+## Exemption Workflow
+
+HR submits and maintains applicable attendance exemption records. Admin reviews Pending exemptions and can Approve or Decline each request. Approval History includes both outcomes and can be searched by employee name.
+
+## Technology Stack
+
+- React 19 and React Router
+- TypeScript
+- Vite
+- Tailwind CSS
+- Supabase and PostgreSQL
+- ExcelJS and SheetJS for spreadsheet workflows
+- Recharts
+- Vercel
+- Git and GitHub
+
+## Project Structure
+
+```text
+src/
+  app/          Application routes
+  components/   Shared UI and feature components
+  context/      Authentication, attendance, employee, and theme state
+  pages/        HR and Admin screens
+  services/     Supabase and application data services
+  utils/        Attendance, leave, export, and formatting rules
+
+supabase/
+  migrations/   Forward database migrations and protected workflows
+
+tests/          Focused regression tests
+public/         Static assets and templates
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Local Development
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Install dependencies and start the Vite development server:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
+
+Available verification commands:
+
+```bash
+npm run test:focused
+npm run build
+npm run lint
+```
+
+Use `npm run preview` to preview a completed production build locally.
+
+## Environment Variables
+
+The application uses these environment variables:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Store local values in the appropriate `.env` file. Do not commit credentials or environment-specific secrets.
+
+## Deployment
+
+WATTS APP is deployed through Vercel. Configure the required environment variables in the deployment environment and use the repository's Vercel configuration for application routing.
+
+## Testing
+
+Run `npm run test:focused` for the focused attendance and role regression suite. Run `npm run build` to perform TypeScript compilation and create the production Vite bundle.
+
+## Security / Access
+
+WATTS APP is an authenticated internal application. HR and Admin roles have separate responsibilities, while Supabase-backed access controls protect application data and workflows.
+
+## Creator
+
+Created by **Nathaniel**
+
+Built with care for **APP Electric Corporation**.
+
+Support the creator ☕
+
+## Notes
+
+WATTS APP is an internal business application intended for authorized APP Electric Corporation personnel.

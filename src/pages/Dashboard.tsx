@@ -69,7 +69,7 @@ function formatDayLabel(dayValue: string) {
   if (dayValue === "all") return "All Dates";
   return new Date(dayValue).toLocaleDateString("en-US", {
     month: "long",
-    day: "2-digit",
+    day: "numeric",
     year: "numeric",
   });
 }
@@ -85,14 +85,20 @@ type UploadedFileRow = {
   uploadedAt: string;
   lates: number;
   undertime: number;
+  attendanceRange: string;
+  matched: number;
+  unmatched: number;
+  generated: number;
+  status: string;
 };
 
 export function Dashboard() {
-  const { role } = useAuth();
+  const { role, hrScope } = useAuth();
   const isHr = role === "HR";
   const {
     loading: attendanceLoading,
     handleFileUpload,
+    mainDailyAttendance,
     fileName,
     uploadedFiles,
     lateRecords,
@@ -138,6 +144,8 @@ export function Dashboard() {
   );
 
   const totalUndertime = generatedUndertimes.length + manualUndertimes.length;
+  const mainDayRecords = useMemo(() => selectedDayScope === "all" ? [] : mainDailyAttendance.filter((record) => record.workDate === selectedDayScope), [mainDailyAttendance, selectedDayScope]);
+  const mainMonthRecords = useMemo(() => selectedMonthScope === "all" ? mainDailyAttendance : mainDailyAttendance.filter((record) => record.workDate.startsWith(selectedMonthScope)), [mainDailyAttendance, selectedMonthScope]);
 
   const filterLabel =
     selectedDayScope !== "all"
@@ -184,29 +192,36 @@ export function Dashboard() {
     if (lateRecords.length === 0 && absences.length === 0) return [] as string[];
 
     const registered = new Set(
-      employees.map((employee) => normalizeEmployeeName(employee.fullName))
+      employees.flatMap((employee) => [
+        normalizeEmployeeName(employee.fullName),
+        ...(employee.attendanceName ? [normalizeEmployeeName(employee.attendanceName)] : []),
+      ])
     );
+    const registeredIds = new Set(employees.map((employee) => employee.id));
     const seen = new Set<string>();
 
-    const collect = (name: string) => {
+    const collect = (name: string, employeeId?: string) => {
       const clean = name?.trim();
       if (!clean) return;
 
       const key = normalizeEmployeeName(clean);
-      if (!key || registered.has(key) || seen.has(key)) return;
+      if (!key || (employeeId && registeredIds.has(employeeId)) || registered.has(key) || seen.has(key)) return;
 
       seen.add(key);
     };
 
-    lateRecords.forEach((record) => collect(record.name));
-    absences.forEach((record) => collect(record.name));
+    lateRecords.forEach((record) => collect(record.name, record.employeeId));
+    absences.forEach((record) => collect(record.name, record.employeeId));
 
     return Array.from(seen);
   }, [employees, lateRecords, absences]);
 
   const uploadedRows = useMemo<UploadedFileRow[]>(
     () =>
-      uploadedFiles.map((file) => ({
+      uploadedFiles.map((file) => {
+        const daily = mainDailyAttendance.filter((record) => record.sourceFileId === file.id);
+        const dates = [...new Set(daily.map((record) => record.workDate))].sort();
+        return ({
         id: file.id,
         fileName: file.fileName,
         uploadedAt: new Date(file.uploadedAt).toLocaleString("en-US", {
@@ -218,8 +233,13 @@ export function Dashboard() {
         }),
         lates: file.lateRecords.length,
         undertime: file.generatedUndertimes.length,
-      })),
-    [uploadedFiles]
+        attendanceRange: dates.length === 0 ? "—" : dates.length === 1 ? dates[0] : `${dates[0]} – ${dates[dates.length - 1]}`,
+        matched: daily.filter((record) => record.employeeId).length,
+        unmatched: daily.filter((record) => !record.employeeId).length,
+        generated: daily.length + file.lateRecords.length + file.generatedUndertimes.length,
+        status: daily.some((record) => !record.employeeId) ? "Needs Review" : "Processed",
+      });}),
+    [uploadedFiles, mainDailyAttendance]
   );
 
   const handleResetFilters = () => {
@@ -251,23 +271,22 @@ export function Dashboard() {
     } as React.ChangeEvent<HTMLInputElement>);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!confirmState) return;
 
     if (confirmState.kind === "clear-all") {
-      clearAllAttendanceHistory();
-      toast.success(
-        "History cleared",
-        "All uploaded attendance and related records were cleared."
-      );
+      const result = await clearAllAttendanceHistory();
+      if (result.success) toast.success("History cleared", result.message);
+      else toast.error("Clear incomplete", result.message);
     }
 
     if (confirmState.kind === "delete-file") {
-      deleteUploadedFile(confirmState.fileId);
-      toast.success(
-        "File moved to Trash",
-        "The uploaded file and its generated attendance records were moved to Trash. Manual HR records such as exemptions, absences, and manual undertime entries were kept."
-      );
+      const result = await deleteUploadedFile(confirmState.fileId);
+      if (result.success) {
+        toast.success("Attendance upload moved to Recycle Bin.");
+        if (result.warning) toast.warning("Refresh incomplete", result.warning);
+      }
+      else toast.error("Delete failed", result.message);
     }
 
     setConfirmState(null);
@@ -318,13 +337,13 @@ export function Dashboard() {
     if (absences.length > 0) {
       items.push({
         id: "absences",
-        tone: "warning",
+        tone: "danger",
         icon: UserX,
         title: `${absences.length} absence${
           absences.length === 1 ? "" : "s"
         } logged`,
         description: "Recorded absences in the current scope.",
-        cta: { label: "View absences", onClick: () => navigate("/absences") },
+        cta: { label: "View absences", onClick: () => navigate(isHr ? "/absences" : "/absence-records") },
       });
     }
 
@@ -350,6 +369,7 @@ export function Dashboard() {
     repeatedLateOffenders.length,
     unreadMemoCount,
     unregisteredEmployeeNames.length,
+    isHr,
   ]);
 
   const attentionToneClasses: Record<
@@ -358,11 +378,11 @@ export function Dashboard() {
   > = {
     warning: {
       wrap: "border-warning-100 bg-warning-50/40",
-      icon: "border border-warning-100 bg-warning-50 text-warning-700",
+      icon: "border border-warning-100 bg-warning-50 text-warning-700 dark:text-amber-300",
     },
     danger: {
       wrap: "border-danger-100 bg-danger-50/40",
-      icon: "border border-danger-100 bg-danger-50 text-danger-700",
+      icon: "border border-danger-100 bg-danger-50 text-danger-700 dark:text-rose-300",
     },
     info: {
       wrap: "border-sky-100 bg-sky-50/40",
@@ -438,6 +458,15 @@ export function Dashboard() {
         <span className="text-sm text-slate-600">{row.uploadedAt}</span>
       ),
     },
+    {
+      key: "attendanceRange",
+      header: "Attendance Date / Range",
+      render: (row) => <span className="text-sm text-slate-600">{row.attendanceRange}</span>,
+    },
+    { key: "matched", header: "Matched", align: "right", render: (row) => row.matched },
+    { key: "unmatched", header: "Unmatched", align: "right", render: (row) => row.unmatched },
+    { key: "generated", header: "Generated Records", align: "right", render: (row) => row.generated },
+    { key: "status", header: "Status", render: (row) => <Badge tone={row.status === "Processed" ? "success" : "warning"}>{row.status}</Badge> },
     {
       key: "lates",
       header: "Lates",
@@ -547,6 +576,19 @@ export function Dashboard() {
         onReset={handleResetFilters}
         canReset={canResetFilters}
       />
+
+      {hrScope === "MAIN" && selectedDayScope !== "all" && (
+        <DashboardSection eyebrow="MAIN Office" title="Daily Attendance Summary" description={`${mainDayRecords.length} attendance record${mainDayRecords.length === 1 ? "" : "s"} for ${formatDayLabel(selectedDayScope)}.`}>
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">{[["Present", mainDayRecords.filter((r) => r.employeeId).length], ["Missing Check-Out", mainDayRecords.filter((r) => r.status === "missing_checkout").length], ["Late", mainDayRecords.filter((r) => r.lateMinutes > 0).length], ["Half-Day", mainDayRecords.filter((r) => r.halfDay).length], ["Unmatched", mainDayRecords.filter((r) => r.status === "unmatched_employee").length], ["Complete", mainDayRecords.filter((r) => r.status === "complete").length]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold text-slate-900">{value}</p></div>)}</div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Employee</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">First In</th><th className="px-4 py-3">Last Out</th><th className="px-4 py-3">Check-Out Source</th><th className="px-4 py-3">Status</th></tr></thead>
+              <tbody className="divide-y divide-slate-100">{mainDayRecords.map((record) => <tr key={record.id ?? `${record.rawName}-${record.workDate}`}><td className="px-4 py-3 font-medium text-slate-900">{record.employeeName}</td><td className="px-4 py-3 text-slate-600">{new Date(`${record.workDate}T00:00:00`).toLocaleDateString("en-US")}</td><td className="px-4 py-3 text-slate-600">{record.firstIn ? new Date(`${record.workDate}T${record.firstIn}`).toLocaleTimeString("en-US") : "—"}</td><td className="px-4 py-3 text-slate-600">{record.lastOut ? new Date(`${record.workDate}T${record.lastOut}`).toLocaleTimeString("en-US") : "—"}</td><td className="px-4 py-3 capitalize text-slate-600">{record.checkoutSource ?? "—"}</td><td className="px-4 py-3"><Badge tone={record.status === "complete" ? "success" : record.status === "missing_checkout" ? "warning" : "danger"}>{record.status.replaceAll("_", " ")}</Badge></td></tr>)}</tbody>
+            </table>
+          </div>
+        </DashboardSection>
+      )}
+      {hrScope === "MAIN" && selectedDayScope === "all" && selectedMonthScope !== "all" && <DashboardSection eyebrow="MAIN Office" title={`${formatMonthLabel(selectedMonthScope)} Overview`} description="Monthly totals are summarized here; use Attendance Records for full history."><div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">{[["Attendance Days", new Set(mainMonthRecords.map((r) => r.workDate)).size], ["Present Records", mainMonthRecords.filter((r) => r.employeeId).length], ["Late", mainMonthRecords.filter((r) => r.lateMinutes > 0).length], ["Half-Days", mainMonthRecords.filter((r) => r.halfDay).length], ["Missing Check-Outs", mainMonthRecords.filter((r) => r.status === "missing_checkout").length], ["Unmatched", mainMonthRecords.filter((r) => r.status === "unmatched_employee").length]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold text-slate-900">{value}</p></div>)}</div><Button className="mt-4" onClick={() => navigate("/attendance-records")}>View Attendance Records</Button></DashboardSection>}
 
       {isHr && <DashboardSection
         eyebrow="Shortcuts"

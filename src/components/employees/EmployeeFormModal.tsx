@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { UserPlus, UserCog, X } from "lucide-react";
+import { Camera, Trash2, UserPlus, UserCog, X } from "lucide-react";
 import { Button, Input, Select } from "../ui";
+import { EmployeeAvatar } from "./EmployeeAvatar";
+import { validateEmployeePhoto } from "../../services/employeeService";
 import type {
   Employee,
   EmployeeInput,
+  Employer,
   EmploymentStatus,
+  HrScope,
   Workspace,
 } from "../../services/employeeService";
 
@@ -15,6 +19,7 @@ type Props = {
   open: boolean;
   mode: Mode;
   defaultWorkspace?: Workspace | null;
+  hrScope: HrScope;
   initial?: Employee | null;
   onClose: () => void;
   onSubmit: (input: EmployeeInput) => Promise<void>;
@@ -22,6 +27,7 @@ type Props = {
 
 type FormState = {
   workspace: Workspace | "";
+  employer: Employer | "";
   fullName: string;
   employeeNumber: string;
   department: string;
@@ -32,6 +38,7 @@ type FormState = {
 function makeEmptyForm(defaultWorkspace?: Workspace | null): FormState {
   return {
     workspace: defaultWorkspace ?? "",
+    employer: defaultWorkspace === "APP" ? "APP" : "WATTS APP",
     fullName: "",
     employeeNumber: "",
     department: "",
@@ -44,6 +51,7 @@ export function EmployeeFormModal({
   open,
   mode,
   defaultWorkspace,
+  hrScope,
   initial,
   onClose,
   onSubmit,
@@ -54,6 +62,10 @@ export function EmployeeFormModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fullNameRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [removePhoto, setRemovePhoto] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || typeof document === "undefined") return;
@@ -76,6 +88,7 @@ export function EmployeeFormModal({
     if (mode === "edit" && initial) {
       setForm({
         workspace: initial.workspace,
+        employer: initial.employer,
         fullName: initial.fullName ?? "",
         employeeNumber: initial.employeeNumber ?? "",
         department: initial.department ?? "",
@@ -85,6 +98,7 @@ export function EmployeeFormModal({
     } else if (mode === "add" && initial) {
       setForm({
         workspace: defaultWorkspace ?? "",
+        employer: initial.employer,
         fullName: initial.fullName ?? "",
         employeeNumber: initial.employeeNumber ?? "",
         department: initial.department ?? "",
@@ -97,6 +111,9 @@ export function EmployeeFormModal({
 
     setError(null);
     setSubmitting(false);
+    setPhotoFile(null);
+    setRemovePhoto(false);
+    setPreviewUrl(null);
   }, [open, mode, initial, defaultWorkspace]);
 
   useEffect(() => {
@@ -132,8 +149,8 @@ export function EmployeeFormModal({
   const Icon = mode === "add" ? UserPlus : UserCog;
 
   const isValid = useMemo(
-    () => form.fullName.trim().length > 0 && form.workspace.length > 0,
-    [form.fullName, form.workspace]
+    () => form.fullName.trim().length > 0 && form.workspace.length > 0 && form.employer.length > 0,
+    [form.fullName, form.workspace, form.employer]
   );
 
   const handleChange = <K extends keyof FormState>(
@@ -154,11 +171,15 @@ export function EmployeeFormModal({
     try {
       await onSubmit({
         workspace: form.workspace as Workspace,
+        employer: form.employer as Employer,
+        hrScope,
         fullName: form.fullName.trim(),
         employeeNumber: form.employeeNumber.trim() || null,
         department: form.department.trim() || null,
         position: form.position.trim() || null,
         employmentStatus: form.employmentStatus,
+        profilePhotoFile: photoFile,
+        removeProfilePhoto: removePhoto,
       });
 
       onClose();
@@ -167,6 +188,17 @@ export function EmployeeFormModal({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const selectPhoto = (file?: File) => {
+    if (!file) return;
+    const validation = validateEmployeePhoto(file);
+    if (validation) { setError(validation); return; }
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPhotoFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+    setRemovePhoto(false);
+    setError(null);
   };
 
   if (!open || typeof document === "undefined") return null;
@@ -211,6 +243,18 @@ export function EmployeeFormModal({
           </div>
 
           <div className="px-6 py-5 space-y-4">
+            <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              {previewUrl ? <img src={previewUrl} alt="Selected profile preview" className="h-20 w-20 rounded-full border border-brand-100 object-cover" /> : <EmployeeAvatar employeeId={initial?.id} name={form.fullName || "Employee"} profilePhotoPath={removePhoto ? null : initial?.profilePhotoPath} size="lg" />}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-slate-900">Profile Photo</p>
+                <p className="mt-0.5 text-xs text-slate-500">Optional JPG, PNG, or WebP up to 2 MB.</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => selectPhoto(event.target.files?.[0])} />
+                  <Button type="button" size="sm" variant="secondary" leftIcon={<Camera className="h-3.5 w-3.5" />} onClick={() => photoInputRef.current?.click()}>{initial?.profilePhotoPath || photoFile ? "Change Photo" : "Upload Photo"}</Button>
+                  {(initial?.profilePhotoPath || photoFile) && <Button type="button" size="sm" variant="ghost" leftIcon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => { if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewUrl(null); setPhotoFile(null); setRemovePhoto(Boolean(initial?.profilePhotoPath)); }}>Remove Photo</Button>}
+                </div>
+              </div>
+            </div>
             <Input
               ref={fullNameRef}
               label="Full Name *"
@@ -223,19 +267,17 @@ export function EmployeeFormModal({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
-                label="Workspace / Company *"
-                name="workspace"
-                value={form.workspace}
-                onChange={(e) =>
-                  handleChange("workspace", e.target.value as Workspace | "")
-                }
+                label="Employer *"
+                name="employer"
+                value={form.employer}
+                onChange={(e) => handleChange("employer", e.target.value as Employer | "")}
                 required
               >
-                <option value="" disabled>
-                  Select company...
-                </option>
+                <option value="" disabled>Select employer...</option>
                 <option value="APP">APP</option>
                 <option value="WAIS">WAIS</option>
+                <option value="WATTS APP">WATTS APP</option>
+                <option value="M2B">M2B</option>
               </Select>
 
               <Input

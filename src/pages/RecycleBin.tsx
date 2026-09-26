@@ -5,7 +5,6 @@ import {
   FileSpreadsheet,
   RefreshCw,
   Layers,
-  EyeOff,
   ShieldCheck,
   UserX,
   Clock3,
@@ -131,12 +130,15 @@ export function RecycleBin() {
     removeUploadedFileFromRecycleBin,
     restoreManualHrRecord,
     removeManualHrRecordFromRecycleBin,
+    deleteAllRecycleBinItems,
   } = useAttendance();
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [manualPending, setManualPending] = useState<ManualPendingAction>(null);
   const [manualBusyId, setManualBusyId] = useState<string | null>(null);
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
 
   useEffect(() => {
     void loadDeletedAttendanceData();
@@ -253,14 +255,14 @@ export function RecycleBin() {
             <Button
               variant="danger"
               size="sm"
-              leftIcon={<EyeOff className="w-3.5 h-3.5" />}
+              leftIcon={<Trash2 className="w-3.5 h-3.5" />}
               loading={
                 manualBusyId === row.id && manualPending?.kind === "remove"
               }
               disabled={manualBusyId !== null && manualBusyId !== row.id}
               onClick={() => setManualPending({ kind: "remove", record: row })}
             >
-              Remove from Recycle Bin
+              Delete Permanently
             </Button>
           </div>
         ),
@@ -327,12 +329,12 @@ export function RecycleBin() {
             <Button
               variant="danger"
               size="sm"
-              leftIcon={<EyeOff className="w-3.5 h-3.5" />}
+              leftIcon={<Trash2 className="w-3.5 h-3.5" />}
               loading={busyId === row.id && pending?.kind === "remove"}
               disabled={busyId !== null && busyId !== row.id}
               onClick={() => setPending({ kind: "remove", file: row })}
             >
-              Remove from Recycle Bin
+              Delete Permanently
             </Button>
           </div>
         ),
@@ -344,17 +346,38 @@ export function RecycleBin() {
   const uploadedFilesCount = deletedAttendanceData.uploadedFiles.length;
   const manualHrCount = deletedAttendanceData.manualHrRecords.length;
 
+  const handleDeleteAll = async () => {
+    if (deletedAttendanceCount === 0) return;
+    setDeleteAllBusy(true);
+    try {
+      await deleteAllRecycleBinItems();
+      setDeleteAllOpen(false);
+    } finally {
+      setDeleteAllBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Recycle Bin"
-        description="Records that were moved to Trash. Uploaded files are shown separately from manual HR records (exemptions, absences, manual undertime) so you can manage each independently. Remove from Recycle Bin hides the entry from the UI but keeps the data in the database for emergency retrieval."
+        description="Records that were moved to Trash. Uploaded files are shown separately from manual HR records so each item can be restored or permanently deleted."
         actions={
           <>
             <Badge tone="neutral">
               {deletedAttendanceCount} item
               {deletedAttendanceCount === 1 ? "" : "s"} in Trash
             </Badge>
+            {deletedAttendanceCount > 0 && (
+              <Button
+                variant="danger"
+                leftIcon={<Trash2 className="w-4 h-4" />}
+                onClick={() => setDeleteAllOpen(true)}
+                disabled={deletedAttendanceLoading || deleteAllBusy}
+              >
+                Delete All
+              </Button>
+            )}
             <Button
               variant="secondary"
               leftIcon={<RefreshCw className="w-4 h-4" />}
@@ -386,7 +409,7 @@ export function RecycleBin() {
           <EmptyState
             icon={<Trash2 className="w-6 h-6" />}
             title="No uploaded files in Trash"
-            description="Deleting an attendance file from the dashboard moves it here. You can restore the file or hide it from the UI."
+            description="Deleting an attendance file from the dashboard moves it here. You can restore or permanently delete it."
             bordered={false}
             className="py-10"
           />
@@ -419,7 +442,7 @@ export function RecycleBin() {
           <EmptyState
             icon={<Trash2 className="w-6 h-6" />}
             title="No manual HR records in Trash"
-            description="Deleting an Exemption, Absence, or Manual Undertime moves it here. You can restore it or hide it from the UI."
+            description="Deleting an Exemption, Absence, or Manual Undertime moves it here. You can restore or permanently delete it."
             bordered={false}
             className="py-10"
           />
@@ -432,6 +455,17 @@ export function RecycleBin() {
           />
         )}
       </Card>
+
+      <ConfirmModal
+        open={deleteAllOpen}
+        tone="danger"
+        title="Permanently delete all items?"
+        description="This will permanently delete all items currently in your Recycle Bin. This action cannot be undone."
+        confirmLabel="Delete All Permanently"
+        loading={deleteAllBusy}
+        onConfirm={handleDeleteAll}
+        onCancel={() => (deleteAllBusy ? null : setDeleteAllOpen(false))}
+      />
 
       <ConfirmModal
         open={pending?.kind === "restore"}
@@ -457,17 +491,16 @@ export function RecycleBin() {
       <ConfirmModal
         open={pending?.kind === "remove"}
         tone="danger"
-        title="Remove this batch from the Recycle Bin?"
+        title="Permanently delete this batch?"
         description={
           pending?.kind === "remove" ? (
             <>
               <span className="font-semibold">{pending.file.fileName}</span> and
-              its related records will no longer appear in the app, but the
-              database rows will be retained for emergency retrieval.
+               its related trashed records will be permanently deleted. This action cannot be undone.
             </>
           ) : null
         }
-        confirmLabel="Remove from Recycle Bin"
+        confirmLabel="Delete Permanently"
         loading={busyId === pending?.file.id && pending?.kind === "remove"}
         onConfirm={handleConfirmRemove}
         onCancel={() => (busyId ? null : setPending(null))}
@@ -505,7 +538,7 @@ export function RecycleBin() {
       <ConfirmModal
         open={manualPending?.kind === "remove"}
         tone="danger"
-        title="Remove this record from the Recycle Bin?"
+        title="Permanently delete this record?"
         description={
           manualPending?.kind === "remove" ? (
             <>
@@ -517,12 +550,11 @@ export function RecycleBin() {
               <span className="font-semibold">
                 {manualPending.record.name || "this employee"}
               </span>{" "}
-              will no longer appear in the Recycle Bin, but the database row
-              will be retained for emergency retrieval.
+               will be permanently deleted. This action cannot be undone.
             </>
           ) : null
         }
-        confirmLabel="Remove from Recycle Bin"
+        confirmLabel="Delete Permanently"
         loading={
           manualBusyId === manualPending?.record.id &&
           manualPending?.kind === "remove"

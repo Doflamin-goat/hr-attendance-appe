@@ -29,6 +29,7 @@ import {
   type Column,
 } from "../components/ui";
 import { EmployeeFormModal } from "../components/employees/EmployeeFormModal";
+import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import {
   normalizeEmployeeName,
   type Employee,
@@ -38,13 +39,14 @@ import {
 import { countUndertimeRecords } from "../utils/attendanceForms";
 
 type StatusFilter = "active" | "inactive" | "all";
-type WorkspaceFilter = "all" | Workspace;
+type WorkspaceFilter = "all" | "APP" | "WAIS" | "WATTS APP" | "M2B";
 
 type EmployeeRow = {
   id: string;
   employee: Employee | null;
   fullName: string;
   workspace: Workspace | null;
+  employer: string | null;
   employeeNumber: string | null;
   department: string | null;
   position: string | null;
@@ -64,51 +66,6 @@ function formatCount(value: number) {
   return value > 0 ? value : "—";
 }
 
-function getInitials(name: string) {
-  const parts = name
-    .replace(/,/g, " ")
-    .split(" ")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
-}
-
-function getEmployeePhoto(name: string) {
-  const fileName = name
-    .trim()
-    .toLowerCase()
-    .replace(/\./g, "")
-    .replace(/,/g, "")
-    .replace(/\s+/g, "-");
-  return `/employees/${fileName}.jpg`;
-}
-
-function EmployeeAvatar({ name }: { name: string }) {
-  const [hasError, setHasError] = useState(false);
-  const photo = getEmployeePhoto(name);
-
-  if (!hasError) {
-    return (
-      <img
-        src={photo}
-        alt={name}
-        onError={() => setHasError(true)}
-        className="h-10 w-10 rounded-full border border-slate-200 object-cover flex-shrink-0"
-      />
-    );
-  }
-
-  return (
-    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700 border border-brand-100 flex-shrink-0">
-      {getInitials(name)}
-    </div>
-  );
-}
-
 function RowStatusBadge({ status }: { status: EmployeeRow["status"] }) {
   if (status === "active") return <StatusBadge kind="active" />;
   if (status === "inactive") return <StatusBadge kind="inactive" />;
@@ -123,7 +80,7 @@ function CompanyBadge({ workspace }: { workspace: Workspace | null }) {
 }
 
 export default function EmployeesPage() {
-  const { role } = useAuth();
+  const { role, hrScope } = useAuth();
   const readOnly = role === "Admin";
   const { workspace: currentWorkspace } = useAuth();
   const {
@@ -172,8 +129,9 @@ export default function EmployeesPage() {
       map.set(normalizeEmployeeName(emp.fullName), {
         id: emp.id,
         employee: emp,
-        fullName: emp.fullName,
+        fullName: hrScope === "MAIN" ? (emp.attendanceName ?? emp.fullName) : emp.fullName,
         workspace: emp.workspace,
+        employer: emp.employer,
         employeeNumber: emp.employeeNumber,
         department: emp.department,
         position: emp.position,
@@ -183,7 +141,19 @@ export default function EmployeesPage() {
         lateExemptionsCount: 0,
         undertimeCount: countUndertimeRecords(emp.fullName, generatedUndertimes, manualUndertimes),
       });
+      if (emp.attendanceName) {
+        map.set(normalizeEmployeeName(emp.attendanceName), map.get(normalizeEmployeeName(emp.fullName))!);
+      }
     });
+
+    const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+    const findRegisteredRow = (record: { employeeId?: string; name: string }) => {
+      if (record.employeeId) {
+        const employee = employeeById.get(record.employeeId);
+        if (employee) return map.get(normalizeEmployeeName(employee.fullName));
+      }
+      return map.get(normalizeEmployeeName(record.name));
+    };
 
     const ensureUnregistered = (name: string) => {
       const cleanName = name?.trim();
@@ -198,6 +168,7 @@ export default function EmployeesPage() {
           employee: null,
           fullName: cleanName,
           workspace: null,
+          employer: null,
           employeeNumber: null,
           department: null,
           position: null,
@@ -214,31 +185,31 @@ export default function EmployeesPage() {
     };
 
     lateRecords.forEach((rec) => {
-      const row = ensureUnregistered(rec.name);
+      const row = findRegisteredRow(rec) ?? ensureUnregistered(rec.name);
       if (row) row.latesCount += 1;
     });
 
     exemptions.forEach((rec) => {
-      const row = ensureUnregistered(rec.name);
+      const row = findRegisteredRow(rec) ?? ensureUnregistered(rec.name);
       if (row) row.lateExemptionsCount += 1;
     });
 
     absences.forEach((rec) => {
-      const row = ensureUnregistered(rec.name);
+      const row = findRegisteredRow(rec) ?? ensureUnregistered(rec.name);
       if (row) row.absenceCount += 1;
     });
 
     generatedUndertimes.forEach((rec) => {
-      const row = ensureUnregistered(rec.name);
-      if (row && !row.employee) row.undertimeCount += 1;
+      const row = findRegisteredRow(rec) ?? ensureUnregistered(rec.name);
+      if (row) row.undertimeCount += 1;
     });
 
     manualUndertimes.forEach((rec) => {
-      const row = ensureUnregistered(rec.name);
-      if (row && !row.employee) row.undertimeCount += 1;
+      const row = findRegisteredRow(rec) ?? ensureUnregistered(rec.name);
+      if (row) row.undertimeCount += 1;
     });
 
-    return Array.from(map.values()).sort((a, b) =>
+    return Array.from(new Set(map.values())).sort((a, b) =>
       a.fullName.localeCompare(b.fullName)
     );
   }, [
@@ -260,15 +231,15 @@ export default function EmployeesPage() {
       if (workspaceFilter !== "all") {
         // Unregistered rows have no workspace; only show them on "All" to avoid
         // hiding legitimate attendance data unexpectedly.
-        if (!row.workspace) return false;
-        if (row.workspace !== workspaceFilter) return false;
+        if (!row.employer) return false;
+        if (row.employer !== workspaceFilter) return false;
       }
 
       if (!keyword) return true;
 
       const haystack = [
         row.fullName,
-        row.workspace ?? "",
+        row.employer ?? "",
         row.employeeNumber ?? "",
         row.department ?? "",
         row.position ?? "",
@@ -297,6 +268,8 @@ export default function EmployeesPage() {
     setEditing({
       id: "",
       workspace: (currentWorkspace ?? "APP") as Workspace,
+      employer: currentWorkspace === "WAIS" ? "WATTS APP" : "APP",
+      hrScope: hrScope ?? "ITC",
       employeeNumber: null,
       fullName: name,
       department: null,
@@ -307,17 +280,19 @@ export default function EmployeesPage() {
       deletedBy: null,
       createdAt: "",
       updatedAt: "",
+      profilePhotoPath: null,
     });
     setModalOpen(true);
   };
 
   const handleSubmit = async (input: EmployeeInput) => {
     if (modalMode === "add") {
-      await addEmployee(input);
+      const created = await addEmployee(input);
       toast.success(
         "Employee added",
-        `${input.fullName} was added to ${input.workspace}.`
+        `${input.fullName} was added to ${input.hrScope} under ${input.employer}.`
       );
+      if (created.photoUploadWarning) toast.warning("Employee created without photo", created.photoUploadWarning);
     } else if (editing) {
       await updateEmployee(editing.id, input);
       toast.success("Employee updated", `${input.fullName}'s details were saved.`);
@@ -359,7 +334,7 @@ export default function EmployeesPage() {
       header: "Employee",
       render: (row) => (
         <div className="flex items-center gap-3 min-w-0">
-          <EmployeeAvatar name={row.fullName} />
+          <EmployeeAvatar employeeId={row.employee?.id} name={row.fullName} profilePhotoPath={row.employee?.profilePhotoPath} />
           <p className="font-medium text-slate-900 truncate min-w-0">
             {row.fullName}
           </p>
@@ -369,7 +344,7 @@ export default function EmployeesPage() {
     {
       key: "company",
       header: "Company",
-      render: (row) => <CompanyBadge workspace={row.workspace} />,
+      render: (row) => row.employer ? <span className="text-sm font-medium text-slate-700">{row.employer}</span> : <CompanyBadge workspace={row.workspace} />,
     },
     {
       key: "position",
@@ -494,8 +469,8 @@ export default function EmployeesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Employee Directory"
-        description={readOnly ? "View the employee master list and attendance summary." : "Manage APP and WAIS employees in one HR master list. Attendance history is preserved when employees are deactivated."}
+        title={hrScope === "MAIN" ? "Main Office Employee Directory" : "Employee Directory"}
+        description={readOnly ? `View the ${hrScope === "MAIN" ? "MAIN Office" : "ITC Plant"} employee list and attendance summary.` : `Manage employees assigned to ${hrScope === "MAIN" ? "MAIN Office" : "ITC Plant"}. Attendance history is preserved when employees are deactivated.`}
         actions={
           <>
             <Button
@@ -528,15 +503,15 @@ export default function EmployeesPage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Total Active Employees"
+          label={hrScope === "MAIN" ? "Total Main Employees" : "Total Active Employees"}
           value={activeEmployeeCount}
           icon={Users}
           tone="brand"
           accent
-          hint="APP & WAIS"
+          hint={hrScope === "MAIN" ? "Main Office" : "ITC Plant"}
         />
         <StatCard
-          label="APP Employees"
+          label={hrScope === "MAIN" ? "WATTS APP" : "APP Employees"}
           value={appActiveCount}
           icon={Building2}
           tone="brand"
@@ -544,7 +519,7 @@ export default function EmployeesPage() {
           hint="Production"
         />
         <StatCard
-          label="WAIS Employees"
+          label={hrScope === "MAIN" ? "M2B" : "WAIS Employees"}
           value={waisActiveCount}
           icon={Building2}
           tone="info"
@@ -582,8 +557,7 @@ export default function EmployeesPage() {
                 }
               >
                 <option value="all">All</option>
-                <option value="APP">APP</option>
-                <option value="WAIS">WAIS</option>
+                {hrScope === "MAIN" ? <><option value="WATTS APP">WATTS APP</option><option value="M2B">M2B</option></> : <><option value="APP">APP</option><option value="WAIS">WAIS</option></>}
               </Select>
             </div>
 
@@ -647,6 +621,7 @@ export default function EmployeesPage() {
         open={modalOpen}
         mode={modalMode}
         defaultWorkspace={currentWorkspace ?? null}
+        hrScope={hrScope ?? "ITC"}
         initial={editing}
         onClose={() => setModalOpen(false)}
         onSubmit={handleSubmit}

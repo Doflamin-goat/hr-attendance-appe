@@ -10,6 +10,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigError } from "../lib/supabase";
 
 type Workspace = "APP" | "WAIS";
+export type HrScope = "ITC" | "MAIN";
 export type AppRole = "Admin" | "HR";
 
 interface AuthState {
@@ -17,6 +18,7 @@ interface AuthState {
   session: Session | null;
   loading: boolean;
   workspace: Workspace | null;
+  hrScope: HrScope | null;
   role: AppRole | null;
   email: string | null;
   configError: string;
@@ -34,12 +36,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [hrScope, setHrScope] = useState<HrScope | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [email, setEmail] = useState<string | null>(null);
 
   async function loadProfile(authUser: User | null) {
     if (!authUser || !supabase) {
       setWorkspace(null);
+      setHrScope(null);
       setRole(null);
       setEmail(authUser?.email ?? null);
       return;
@@ -59,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     setWorkspace(data.workspace as Workspace);
+    setHrScope(data.workspace === "WAIS" ? "MAIN" : "ITC");
     setRole(data.role === "Admin" || data.role === "HR" ? data.role : null);
     setEmail(data.email ?? authUser.email ?? null);
   }
@@ -146,13 +151,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       loading,
       workspace,
+      hrScope,
       role,
       email,
       configError: supabaseConfigError,
       signIn,
       signOut,
     }),
-    [user, session, loading, workspace, role, email]
+    [user, session, loading, workspace, hrScope, role, email]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

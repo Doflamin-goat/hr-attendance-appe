@@ -70,6 +70,30 @@ export function normalizeEmployeeName(value: string) {
   return value.trim().toLowerCase().replace(/[.,]/g, "").replace(/\s+/g, " ");
 }
 
+export type ExemptionHistoryFilters = {
+  search: string;
+  year: string;
+  month: string;
+  status: "all" | "pending" | "approved" | "declined";
+  sort: "newest" | "oldest";
+};
+
+export function filterExemptionHistory<T extends { name: string; date: string; approvalStatus?: "pending" | "approved" | "declined" }>(records: T[], filters: ExemptionHistoryFilters) {
+  const search = normalizeEmployeeName(filters.search);
+  return records.filter((record) => {
+    const date = new Date(record.date);
+    const year = String(date.getFullYear());
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    return (!search || normalizeEmployeeName(record.name).includes(search)) &&
+      (filters.year === "all" || year === filters.year) &&
+      (filters.month === "all" || month === filters.month) &&
+      (filters.status === "all" || (record.approvalStatus ?? "pending") === filters.status);
+  }).sort((a, b) => {
+    const difference = new Date(b.date).getTime() - new Date(a.date).getTime();
+    return filters.sort === "newest" ? difference : -difference;
+  });
+}
+
 export function resolveEmployeeForLate<T extends { id: string; workspace: string; fullName: string }>(
   employees: T[],
   late: { workspace?: string; name: string } | undefined

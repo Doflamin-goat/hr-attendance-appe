@@ -11,6 +11,8 @@ import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { Button, Input, Select, AlertMessage, ThemeToggle } from "../components/ui";
 import { LOGIN_ACCOUNTS } from "../utils/loginAccounts";
+import { WattsIcon } from "../components/branding/WattsIcon";
+import { AppFooter } from "../components/layout/AppFooter";
 
 const REMEMBER_ACCOUNT_KEY = "timecore.rememberedAccount";
 const DEFAULT_ACCOUNT = "app@attendance.local";
@@ -101,7 +103,7 @@ export default function LoginPage() {
     setIsSubmitting(false);
   }
 
-  return (
+  return (<>
     <div className="relative isolate min-h-screen overflow-hidden bg-slate-50">
       <div
         aria-hidden="true"
@@ -201,13 +203,7 @@ export default function LoginPage() {
           <section className="hidden lg:flex items-start px-14 pt-24 xl:px-24 xl:pt-28">
             <div className="max-w-xl rounded-[2rem] border border-white/55 bg-white/30 p-8 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.45)] backdrop-blur-sm">
               <div className="mb-12 flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-700 shadow-[0_16px_40px_-18px_rgba(30,64,175,0.95)] ring-1 ring-brand-900/15">
-                  <img
-                    src="/Watts-logo.png"
-                    alt="Watts Logo"
-                    className="h-10 w-10 object-contain"
-                  />
-                </div>
+                <WattsIcon className="h-14 w-14 drop-shadow-[0_12px_24px_rgba(30,64,175,0.28)]" />
                 <div>
                   <p className="text-[18px] font-bold leading-tight tracking-tight text-slate-950">
                     WATTS APP 
@@ -257,13 +253,7 @@ export default function LoginPage() {
           <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-8 lg:px-14">
             <div className="w-full max-w-md py-4">
               <div className="mb-7 flex items-center gap-3 lg:hidden">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 shadow-sm ring-1 ring-brand-800/20">
-                  <img
-                    src="/Watts-logo.png"
-                    alt="Watts Logo"
-                    className="h-9 w-9 object-contain"
-                  />
-                </div>
+                <WattsIcon className="h-12 w-12 drop-shadow-sm" />
                 <div>
                   <p className="text-[16px] font-bold leading-tight text-slate-900">
                     WATTS APP 
@@ -368,5 +358,6 @@ export default function LoginPage() {
         </div>
       </main>
     </div>
-  );
+    <AppFooter />
+  </>);
 }

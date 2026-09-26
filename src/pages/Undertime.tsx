@@ -1,7 +1,11 @@
 import { useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
-import { attendanceRecordRange, durationMinutes, formatDuration, formatTime12Hour } from "../utils/attendanceForms";
+import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
+import { useAuth } from "../context/AuthContext";
+import { attendanceRecordRange, formatDuration, formatTime12Hour } from "../utils/attendanceForms";
+import { informedPeopleForScope } from "../utils/informedPeople";
+import { checkoutUndertimeMinutes } from "../utils/mainAttendance";
 import {
   Clock3,
   Plus,
@@ -46,6 +50,7 @@ export function Undertime() {
   const {
     loading,
     generatedUndertimes,
+    mainDailyAttendance,
     allLateRecords,
     manualUndertimes,
     addUndertime,
@@ -54,14 +59,13 @@ export function Undertime() {
     deleteManualUndertime,
   } = useAttendance();
   const { activeEmployees } = useEmployees();
+  const { hrScope } = useAuth();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("manual");
   const [employeeName, setEmployeeName] = useState("");
   const [employeeId, setEmployeeId] = useState("");
   const [informed, setInformed] = useState<string[]>([]);
   const [date, setDate] = useState("");
-  const [fromTime, setFromTime] = useState("");
-  const [toTime, setToTime] = useState("");
   const [reason, setReason] = useState("");
   const [sourceRecordId, setSourceRecordId] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("all");
@@ -72,14 +76,33 @@ export function Undertime() {
   const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
-  const calculatedDuration = useMemo(() => durationMinutes(fromTime, toTime), [fromTime, toTime]);
-  const matchingAttendanceRecords = useMemo(() => allLateRecords.filter((record) => {
+  const matchingLateRecords = useMemo(() => allLateRecords.filter((record) => {
     const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
     const recordDate = record.workDate ?? new Date(record.date).toLocaleDateString("en-CA");
     const alreadyGenerated = generatedUndertimes.some((generated) => normalize(generated.name) === normalize(record.name) && generated.date === record.date && generated.timeIn === record.timeIn);
     return record.sourceType !== "manual-entry" && !record.isDeleted && !alreadyGenerated && normalize(record.name) === normalize(employeeName) && recordDate === date && Boolean(attendanceRecordRange(date, record.timeIn));
   }), [allLateRecords, generatedUndertimes, employeeName, date]);
-  const informedOptions = ["Sir Gatch", "Ma’am Chona", "HR Louissa"];
+  const matchingMainAttendance = useMemo(() => mainDailyAttendance.filter((record) =>
+    record.employeeId === employeeId && record.workDate === date && record.status === "complete" && Boolean(record.lastOut) && checkoutUndertimeMinutes(record.workDate, record.lastOut!) > 0
+  ), [mainDailyAttendance, employeeId, date]);
+  const matchingAttendanceRecords = hrScope === "MAIN" ? matchingMainAttendance : matchingLateRecords;
+  const selectedAttendanceRecord = useMemo(
+    () => matchingAttendanceRecords.find((record) => record.id === sourceRecordId),
+    [matchingAttendanceRecords, sourceRecordId],
+  );
+  const selectedAttendanceRange = useMemo(
+    () => {
+      if (!selectedAttendanceRecord) return null;
+      if (hrScope === "MAIN" && "lastOut" in selectedAttendanceRecord && selectedAttendanceRecord.lastOut) {
+        const minutes = checkoutUndertimeMinutes(date, selectedAttendanceRecord.lastOut);
+        const end = new Date(`${date}T00:00:00`).getDay() === 6 ? "15:15" : "17:00";
+        return { kind: "undertime" as const, from: selectedAttendanceRecord.lastOut.slice(0, 5), to: end, minutes };
+      }
+      return "timeIn" in selectedAttendanceRecord ? attendanceRecordRange(date, selectedAttendanceRecord.timeIn) : null;
+    },
+    [date, hrScope, selectedAttendanceRecord],
+  );
+  const informedOptions = informedPeopleForScope(hrScope);
 
   const monthOptions = useMemo(() => {
     const months = new Set<string>();
@@ -102,36 +125,26 @@ export function Undertime() {
     );
   }, [manualUndertimes, selectedMonth]);
 
-  const handleSave = () => {
-    if (
-      !employeeId ||
-      !date ||
-      !sourceRecordId ||
-      !fromTime.trim() ||
-      !toTime.trim() ||
-      !reason.trim()
-    ) {
+  const handleSave = async () => {
+    if (!employeeId || !date || !sourceRecordId || !selectedAttendanceRange || !reason.trim()) {
       setFeedback({
         type: "error",
         message: "Please complete all manual undertime fields.",
       });
       return;
     }
-    if (calculatedDuration === 0) {
-      setFeedback({ type: "error", message: "To time must be later than From time." });
-      return;
-    }
+    const undertimeHours = `${selectedAttendanceRange.from} to ${selectedAttendanceRange.to} (${formatDuration(selectedAttendanceRange.minutes)})`;
 
-    const undertimeHours = `${fromTime} to ${toTime} (${formatDuration(calculatedDuration)})`;
-
-    const result = addUndertime({
+    const result = await addUndertime({
+      employeeId,
       name: employeeName.trim(),
       date,
       reason: reason.trim(),
       undertimeHours,
       informed,
-      sourceLateRecordId: sourceRecordId,
-      originalTimeIn: matchingAttendanceRecords.find((record) => record.id === sourceRecordId)?.timeIn,
+      sourceLateRecordId: hrScope === "MAIN" ? undefined : sourceRecordId,
+      sourceAttendanceRecordId: hrScope === "MAIN" ? sourceRecordId : undefined,
+      originalTimeIn: hrScope === "MAIN" ? undefined : matchingLateRecords.find((record) => record.id === sourceRecordId)?.timeIn,
     });
 
     setFeedback({
@@ -143,8 +156,6 @@ export function Undertime() {
       setEmployeeName("");
       setEmployeeId("");
       setDate("");
-      setFromTime("");
-      setToTime("");
       setReason("");
       setInformed([]);
       setSourceRecordId("");
@@ -152,21 +163,23 @@ export function Undertime() {
     }
   };
 
-  const handleDeleteMonth = () => {
-    deleteManualUndertimesByMonth(selectedMonth);
+  const handleDeleteMonth = async () => {
+    const result = await deleteManualUndertimesByMonth(selectedMonth);
     setFeedback({
-      type: "success",
-      message: `All manual undertime records for ${formatMonthLabel(
-        selectedMonth
-      )} were moved to Trash. Their late records are back in Late Records.`,
+      type: result.success ? "success" : "error",
+      message: result.success ? `All manual undertime records for ${formatMonthLabel(selectedMonth)} were moved to Trash. Their late records are back in Late Records.` : result.message,
     });
-    setSelectedMonth("all");
+    if (result.success) setSelectedMonth("all");
     setConfirmDeleteMonth(false);
   };
 
-  const handleRestoreConfirm = () => {
+  const handleRestoreConfirm = async () => {
     if (!restoreTarget) return;
-    removeManualUndertimeAdjustment(restoreTarget.id);
+    const result = await removeManualUndertimeAdjustment(restoreTarget.id);
+    if (!result.success) {
+      setFeedback({ type: "error", message: result.message });
+      return;
+    }
     setFeedback({
       type: "success",
       message: `${restoreTarget.name}'s late on ${new Date(
@@ -178,9 +191,10 @@ export function Undertime() {
     setRestoreTarget(null);
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
-    deleteManualUndertime(deleteTarget.id);
+    const result = await deleteManualUndertime(deleteTarget.id);
+    if (!result.success) { toast.error("Delete failed", result.message); return; }
     setDeleteTarget(null);
     toast.success("Record moved to Trash.");
   };
@@ -253,11 +267,11 @@ export function Undertime() {
                     key={record.id}
                     className="rounded-lg border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors"
                   >
-                    <p className="text-sm font-semibold text-slate-900">
+                    <div className="flex items-center gap-2"><EmployeeAvatar name={record.name} size="sm" /><p className="text-sm font-semibold text-slate-900">
                       {record.name}
-                    </p>
+                    </p></div>
                     <p className="text-xs text-slate-500 mt-1">
-                      {record.date} • {record.timeIn}
+                      {record.date} â€¢ {record.timeIn}
                     </p>
                     {record.minutesUndertime !== undefined ? <p className="text-xs text-slate-500 mt-0.5">Undertime: {formatDuration(record.minutesUndertime)}</p> : null}
                     <p className="text-xs text-slate-500 mt-0.5">
@@ -270,8 +284,8 @@ export function Undertime() {
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-6">
-          <Card>
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <Card className="self-start xl:sticky xl:top-20">
             <SectionHeader
               icon={<Clock3 className="w-5 h-5" />}
               iconTone="brand"
@@ -292,29 +306,26 @@ export function Undertime() {
               <Select label="Matching Attendance Record" value={sourceRecordId} disabled={!employeeId || !date || matchingAttendanceRecords.length === 0} onChange={(event) => {
                 const id = event.target.value;
                 setSourceRecordId(id);
-                const record = matchingAttendanceRecords.find((item) => item.id === id);
-                const range = record ? attendanceRecordRange(date, record.timeIn) : null;
-                if (range) { setFromTime(range.from); setToTime(range.to); }
               }}>
                 <option value="">{matchingAttendanceRecords.length ? "Select matching attendance" : "No eligible attendance record"}</option>
-                {matchingAttendanceRecords.map((record) => { const range = attendanceRecordRange(date, record.timeIn)!; return <option key={record.id} value={record.id}>{formatTime12Hour(range.from)} – {formatTime12Hour(range.to)} · {formatDuration(range.minutes)}</option>; })}
+                {matchingAttendanceRecords.map((record) => {
+                  const range = hrScope === "MAIN" && "lastOut" in record && record.lastOut
+                    ? { from: record.lastOut.slice(0, 5), to: new Date(`${date}T00:00:00`).getDay() === 6 ? "15:15" : "17:00", minutes: checkoutUndertimeMinutes(date, record.lastOut) }
+                    : "timeIn" in record ? attendanceRecordRange(date, record.timeIn) : null;
+                  return range ? <option key={record.id} value={record.id}>{formatTime12Hour(range.from)} – {formatTime12Hour(range.to)} · {formatDuration(range.minutes)}</option> : null;
+                })}
               </Select>
 
               <div>
-                <p className="text-sm font-medium text-slate-700 mb-1.5">
-                  Undertime Hours
+                <p className="text-sm font-medium text-slate-700 mb-1.5">Undertime Duration</p>
+                <p className="text-sm text-slate-600">
+                  {selectedAttendanceRange
+                    ? <><span className="font-semibold text-slate-900">{formatDuration(selectedAttendanceRange.minutes)}</span> ({formatTime12Hour(selectedAttendanceRange.from)} â€“ {formatTime12Hour(selectedAttendanceRange.to)})</>
+                    : "Select an attendance record with a valid checkout first."}
                 </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Input label="From time" type="time"
-                    value={fromTime}
-                    onChange={(e) => setFromTime(e.target.value)}
-                  />
-                  <Input label="To time" type="time"
-                    value={toTime}
-                    onChange={(e) => setToTime(e.target.value)}
-                  />
-                </div>
-                <p className="mt-2 text-sm text-slate-600">Calculated duration: <span className="font-semibold text-slate-900">{calculatedDuration ? formatDuration(calculatedDuration) : "Select a valid time range"}</span></p>
+                {employeeId && date && matchingAttendanceRecords.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-700">No valid checkout is available. Correct the checkout first through Attendance Records &gt; Add Check-Out / Update Check-Out.</p>
+                )}
               </div>
 
               <Textarea
@@ -326,8 +337,7 @@ export function Undertime() {
               />
 
               <div>
-                <p className="text-sm font-medium text-slate-700">Informed to <span className="font-normal text-slate-400">(optional)</span></p>
-                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} Ã—</button>)}</div></div>
               </div>
 
               <Button
@@ -341,7 +351,7 @@ export function Undertime() {
             </div>
           </Card>
 
-          <Card>
+          <Card className="min-w-0">
             <SectionHeader
               icon={<CalendarDays className="w-5 h-5" />}
               iconTone="neutral"
@@ -375,7 +385,7 @@ export function Undertime() {
               }
             />
 
-            <div className="mt-5">
+            <div className="mt-5 xl:max-h-[calc(100vh-15rem)] xl:overflow-y-auto xl:pr-2">
               {loading ? (
                 <SkeletonTable rows={4} columns={3} />
               ) : filteredManualUndertimes.length === 0 ? (
@@ -390,31 +400,31 @@ export function Undertime() {
                   bordered
                 />
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-3">
                   {filteredManualUndertimes.map((record) => (
                     <li
                       key={record.id}
-                      className="rounded-lg border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors"
+                      className="rounded-xl border border-slate-200 bg-white p-4 transition-colors hover:border-slate-300"
                     >
-                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-slate-900">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[15px] font-semibold text-slate-900">
                             {record.name}
                           </p>
-                          <p className="text-xs text-slate-500 mt-0.5">
+                          <p className="mt-1 text-xs text-slate-500">
                             {record.date}
                           </p>
-                          <p className="text-xs text-slate-500 mt-0.5">
+                          <p className="mt-1 text-xs text-slate-500">
                             Hours: {record.undertimeHours}
                           </p>
-                          {Array.isArray(record.informed) && record.informed.length > 0 ? <p className="text-xs text-slate-500 mt-0.5">Informed to: {record.informed.join(", ")}</p> : null}
+                          {Array.isArray(record.informed) && record.informed.length > 0 ? <p className="mt-1 text-xs text-slate-500">Informed: {record.informed.join(", ")}</p> : null}
                         </div>
 
-                        <div className="flex flex-col items-start sm:items-end gap-2 flex-shrink-0">
-                          <p className="text-sm text-slate-600 max-w-sm">
+                        <div className="flex max-w-sm flex-col items-start gap-3 sm:items-end">
+                          <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm leading-5 text-slate-700">
                             {record.reason}
                           </p>
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                             <Button
                               variant="warning"
                               size="sm"
