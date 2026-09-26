@@ -2,9 +2,810 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { canAccessPath } from "../src/utils/access.ts";
-import { activeEmployeeOptions, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, parseAttendanceDateTime } from "../src/utils/attendanceForms.ts";
+import { activeEmployeeOptions, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../src/utils/attendanceForms.ts";
 import { LOGIN_ACCOUNTS } from "../src/utils/loginAccounts.ts";
-import { describeSubmitExemptionError, formatOptionalReportedTime, matchingLinkedLateRecords } from "../src/utils/exemptionForms.ts";
+import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../src/utils/exemptionForms.ts";
+import { adjustmentPartsToMinutes, ANNUAL_LEAVE_ENTITLEMENT_MINUTES, calculateAnnualLeaveTotals, calculateLeaveDuration, countRejectedLeaveRequests, formatLeaveDate, formatLeaveMinutes, formatLeaveRequestDuration, formatLeaveStatus, formatLeaveTime, leaveBalance, remainingLeaveAdjustment } from "../src/utils/leaveRules.ts";
+import { activeMainAttendanceRecordIds, aggregateMainAttendance, checkoutUndertimeMinutes, isItcAttendanceRows, isMainAttendanceHeader, isValidFinalCheckout, mainWorkDateOptions, normalizeMainName, resolveManualCheckout, systemAbsenceEmployeeIds, validateAttendanceFormat } from "../src/utils/mainAttendance.ts";
+import { informedPeopleForScope } from "../src/utils/informedPeople.ts";
+
+const mainHeader = ["Department", "Name", "No.", "Date/Time", "Status", "Location ID", "ID Number", "VerifyCode", "CardNo"];
+const mainEmployees = [
+  { id: "main-rogel", fullName: "Collera, Rogel", employmentStatus: "active", isDeleted: false, startDate: "2018-04-16" },
+  { id: "main-other", fullName: "Main, Missing", employmentStatus: "active", isDeleted: false, startDate: "2020-01-01" },
+];
+
+test("MAIN and ITC formats are recognized separately and wrong scope is rejected", () => {
+  const main = [mainHeader, ["", "ROGEL COLLERA", "7", "09/22/2026 07:46:38 AM", "C/In"]];
+  const itc = [[], [], [], [], ["", "", "Employee Name", "", "09/22/2026 08:15:00 AM"]];
+  assert.equal(isMainAttendanceHeader(mainHeader), true);
+  assert.equal(isItcAttendanceRows(itc), true);
+  assert.throws(() => validateAttendanceFormat("MAIN", itc), /MAIN Office/);
+  assert.throws(() => validateAttendanceFormat("ITC", main), /ITC Plant/);
+});
+
+test("MAIN aggregation preserves an intermediate C/Out but does not treat it as final checkout", () => {
+  const rows = [mainHeader,
+    ["", "ROGEL COLLERA", "7", "09/22/2026 07:46:40 AM", "C/In"],
+    ["", "ROGEL COLLERA", "7", "09/22/2026 07:46:38 AM", "C/In"],
+    ["", "ROGEL COLLERA", "7", "09/22/2026 09:28:52 AM", "C/Out"],
+    ["", "ROGEL COLLERA", "7", "09/22/2026 12:00:00 PM", "C/In"],
+    ["", "ROGEL COLLERA", "7", "09/22/2026 10:12:19 AM", "C/Out"],
+  ];
+  const result = aggregateMainAttendance(rows, mainEmployees);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].employeeId, "main-rogel");
+  assert.equal(result[0].firstIn, "07:46:38");
+  assert.equal(result[0].lastOut, "10:12:19");
+  assert.equal(result[0].biometricLastOut, "10:12:19");
+  assert.equal(result[0].status, "missing_checkout");
+  assert.equal(result[0].halfDay, false);
+  assert.equal(result[0].undertimeMinutes, 0);
+});
+
+test("MAIN final checkout validity follows punch order without inventing a time threshold", () => {
+  assert.equal(isValidFinalCheckout("10:00:13", ["08:55:42", "12:00:00"]), false);
+  assert.equal(isValidFinalCheckout("16:00:00", ["07:45:00", "13:00:00"]), true);
+  assert.equal(isValidFinalCheckout("17:00:00", ["08:00:00", "13:00:00"]), true);
+});
+
+test("invalid morning C/Out creates no undertime while valid early final checkout still does", () => {
+  const joben = { id: "main-joben", fullName: "Huerto, Joben Luciano", attendanceName: "Joben Huerto", employmentStatus: "active", isDeleted: false };
+  const invalid = aggregateMainAttendance([mainHeader,
+    ["", "JOBEN HUERTO", "90", "09/22/2026 08:55:42 AM", "C/In"],
+    ["", "JOBEN HUERTO", "90", "09/22/2026 10:00:13 AM", "C/Out"],
+    ["", "JOBEN HUERTO", "90", "09/22/2026 12:00:00 PM", "C/In"],
+  ], [joben])[0];
+  assert.equal(invalid.status, "missing_checkout");
+  assert.equal(invalid.undertimeMinutes, 0);
+  assert.equal(invalid.lastOut, "10:00:13");
+
+  const valid = aggregateMainAttendance([mainHeader,
+    ["", "JOBEN HUERTO", "90", "09/22/2026 07:45:00 AM", "C/In"],
+    ["", "JOBEN HUERTO", "90", "09/22/2026 01:00:00 PM", "C/In"],
+    ["", "JOBEN HUERTO", "90", "09/22/2026 04:00:00 PM", "C/Out"],
+  ], [joben])[0];
+  assert.equal(valid.status, "complete");
+  assert.equal(valid.undertimeMinutes, 60);
+});
+
+test("MAIN late and half-day classification use only first C/In", () => {
+  const late = aggregateMainAttendance([mainHeader, ["", "ROGEL COLLERA", "7", "09/21/2026 08:15:00 AM", "C/In"], ["", "ROGEL COLLERA", "7", "09/21/2026 12:30:00 PM", "C/In"], ["", "ROGEL COLLERA", "7", "09/21/2026 05:30:00 PM", "C/Out"]], mainEmployees)[0];
+  assert.equal(late.lateMinutes, 15);
+  assert.equal(late.halfDay, false);
+});
+
+test("MAIN Half-Day uses one aggregated first C/In despite repeated and later scans", () => {
+  const morning = aggregateMainAttendance([mainHeader,
+    ["", "ROGEL COLLERA", "37", "09/21/2026 07:46:38 AM", "C/In"],
+    ["", "ROGEL COLLERA", "37", "09/21/2026 07:46:39 AM", "C/In"],
+    ["", "ROGEL COLLERA", "37", "09/21/2026 09:28:00 AM", "C/Out"],
+    ["", "ROGEL COLLERA", "37", "09/21/2026 12:00:00 PM", "C/In"],
+  ], mainEmployees);
+  assert.equal(morning.length, 1);
+  assert.equal(morning[0].firstIn, "07:46:38");
+  assert.equal(morning[0].halfDay, false);
+
+  const halfDay = aggregateMainAttendance([mainHeader,
+    ["", "ROGEL COLLERA", "37", "09/21/2026 12:15:00 PM", "C/In"],
+    ["", "ROGEL COLLERA", "37", "09/21/2026 12:15:02 PM", "C/In"],
+  ], mainEmployees);
+  assert.equal(halfDay.length, 1);
+  assert.equal(halfDay[0].halfDay, true);
+});
+
+test("no MAIN punches produces absence candidates and no Half-Day summary", () => {
+  const records = aggregateMainAttendance([mainHeader], mainEmployees);
+  assert.equal(records.length, 0);
+  assert.deepEqual(systemAbsenceEmployeeIds(mainEmployees, records, "2026-09-21"), ["main-rogel", "main-other"]);
+});
+
+test("missing MAIN C/Out waits for manual checkout and then calculates undertime", () => {
+  const missing = aggregateMainAttendance([mainHeader, ["", "ROGEL COLLERA", "7", "09/21/2026 08:00:00 AM", "C/In"]], mainEmployees)[0];
+  assert.equal(missing.status, "missing_checkout");
+  assert.equal(missing.undertimeMinutes, 0);
+  const resolved = resolveManualCheckout(missing, "16:30");
+  assert.equal(resolved.status, "complete");
+  assert.equal(resolved.checkoutSource, "manual");
+  assert.equal(resolved.undertimeMinutes, 30);
+  assert.equal(resolved.firstIn, missing.firstIn);
+});
+
+test("September 22 mixed MAIN punches keep all resolved C/In-only employees present", () => {
+  const employees = Array.from({ length: 12 }, (_, index) => ({
+    id: `employee-${index + 1}`,
+    fullName: `Employee ${index + 1}`,
+    attendanceName: `Employee ${index + 1}`,
+    employmentStatus: "active",
+    isDeleted: false,
+  }));
+  const rows: unknown[][] = [mainHeader];
+  employees.forEach((employee, index) => {
+    rows.push(["", employee.attendanceName, String(index + 1), `09/22/2026 08:${String(index).padStart(2, "0")}:00 AM`, "C/In"]);
+    if (index < 2) rows.push(["", employee.attendanceName, String(index + 1), "09/22/2026 05:00:00 PM", "C/Out"]);
+  });
+
+  const records = aggregateMainAttendance(rows, employees);
+  assert.equal(records.length, 12);
+  assert.equal(records.filter((record) => record.employeeId).length, 12);
+  assert.equal(records.filter((record) => record.status === "missing_checkout").length, 10);
+  assert.equal(records.filter((record) => record.status === "complete").length, 2);
+  assert.equal(records.every((record) => record.firstIn && record.workDate === "2026-09-22"), true);
+  assert.deepEqual(systemAbsenceEmployeeIds(employees, records, "2026-09-22"), []);
+});
+
+test("September 3 and September 22 remain separate active MAIN attendance dates", () => {
+  const employee = [{ id: "employee-1", fullName: "Employee 1", employmentStatus: "active", isDeleted: false }];
+  const september3 = aggregateMainAttendance([mainHeader, ["", "Employee 1", "1", "09/03/2026 08:00:00 AM", "C/In"]], employee);
+  const september22 = aggregateMainAttendance([mainHeader, ["", "Employee 1", "1", "09/22/2026 08:03:04 AM", "C/In"]], employee);
+  assert.deepEqual(mainWorkDateOptions([...september3, ...september22]), ["2026-09-22", "2026-09-03"]);
+});
+
+test("MAIN employee matching is exact, scope-limited input and never fuzzy", () => {
+  assert.equal(normalizeMainName("Collera, Rogel"), "COLLERA ROGEL");
+  assert.equal(aggregateMainAttendance([mainHeader, ["", "ROGEL COLLERA", "7", "09/21/2026 08:00:00 AM", "C/In"]], mainEmployees)[0].employeeId, "main-rogel");
+  assert.equal(aggregateMainAttendance([mainHeader, ["", "ROGEL COLERA", "7", "09/21/2026 08:00:00 AM", "C/In"]], mainEmployees)[0].status, "unmatched_employee");
+});
+
+test("MAIN active record fallback keeps daily attendance if provenance file name is still active", () => {
+  const record = {
+    id: "daily-1",
+    sourceFileId: null,
+    sourceFileName: "SEPTEMBER 22 2026.xlsx",
+    employeeId: "main-rogel",
+    employeeName: "Collera, Rogel",
+    rawName: "ROGEL COLLERA",
+    deviceNo: null,
+    workDate: "2026-09-22",
+    firstIn: "08:00:00",
+    lastOut: "17:00:00",
+    checkoutSource: "biometric",
+    status: "complete",
+    lateMinutes: 0,
+    lateSeconds: 0,
+    halfDay: false,
+    undertimeMinutes: 0,
+  } as const;
+
+  const ids = activeMainAttendanceRecordIds([record as any], new Set(), [], new Set(["SEPTEMBER 22 2026.xlsx"]));
+  assert.deepEqual([...ids], ["daily-1"]);
+});
+
+test("all confirmed MAIN biometric aliases resolve exactly without duplicating employees", () => {
+  const mappings = [
+    ["MARJORIE REYES", "Reyes, Marjorie Justiniano", "Marjorie Reyes"], ["ARMANDO L. AQUINO", "Aquino, Armando Lantay", "Armando L. Aquino"], ["ARMANDO AQUINO", "Aquino, Armando Lantay", "Armando L. Aquino"],
+    ["ROGEL COLLERA", "Collera, Rogel", "Rogel Collera"], ["REINA LYNN ONG", "Ong, Reina Lynn Yu", "Reina Lynn Ong"], ["CRISELDA ABELLERA", "Abellera, Criselda Gajol", "Criselda Abellera"],
+    ["ULDARICO CODILAN", "Codilan, Uldarico Abletes", "Uldarico Codilan"], ["RALVIC BERNAL", "Bernal, Ralvic Gamay", "Ralvic Bernal"], ["CHRISTINE JOY LASAM", "Lasam, Christine Joy Yap", "Christine Joy Lasam"],
+    ["LEA BAEL", "Bael, Lea Tinibroso", "Lea Bael"], ["JOBEN HUERTO", "Huerto, Joben Luciano", "Joben Huerto"], ["CATHERINE SANTOS", "Santos, Catherine Labaro", "Catherine Santos"],
+    ["KIMBERLY MAE REYES", "Reyes, Kimberly Mae Dela Cruz", "Kimberly Mae Reyes"], ["EDUARD CORONA JR", "Corona Jr., Eduard Espelimbergo", "Eduard Corona Jr"],
+  ] as const;
+  const employees = [...new Map(mappings.map(([, legal, display]) => [legal, { id: legal, fullName: legal, attendanceName: display, biometricAliases: mappings.filter(([, candidate]) => candidate === legal).map(([alias]) => alias), employmentStatus: "active", isDeleted: false }])).values()];
+  for (const [alias, legal, display] of mappings) {
+    const result = aggregateMainAttendance([mainHeader, ["", alias, "", "09/23/2026 08:00:00 AM", "C/In"]], employees)[0];
+    assert.equal(result.employeeId, legal);
+    assert.equal(result.employeeName, display);
+  }
+  assert.equal(employees.length, 13);
+  assert.equal(employees.filter((employee) => employee.fullName === "Aquino, Armando Lantay").length, 1);
+  assert.equal(aggregateMainAttendance([mainHeader, ["", "ARMANDO AQUI", "", "09/23/2026 08:00:00 AM", "C/In"]], employees)[0].status, "unmatched_employee");
+});
+
+test("Armando aliases and device numbers aggregate into one employee-day", () => {
+  const armandoId = "c6df6bbe-d58d-426d-a492-cf75665314b1";
+  const employees = [{ id: armandoId, fullName: "Aquino, Armando Lantay", attendanceName: "Armando L. Aquino", biometricAliases: ["ARMANDO L. AQUINO", "ARMANDO AQUINO"], employmentStatus: "active", isDeleted: false }];
+  const rows = [mainHeader,
+    ["", "ARMANDO L. AQUINO", "3", "09/23/2026 07:20:00 AM", "C/In"],
+    ["", "ARMANDO AQUINO", "99", "09/23/2026 05:14:00 PM", "C/Out"],
+  ];
+  const records = aggregateMainAttendance(rows, employees, { "3": armandoId, "99": armandoId });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].employeeId, armandoId);
+  assert.equal(records[0].employeeName, "Armando L. Aquino");
+  assert.equal(records[0].firstIn, "07:20:00");
+  assert.equal(records[0].lastOut, "17:14:00");
+  assert.equal(records[0].status, "complete");
+});
+
+test("Armando biometric aliases aggregate the exact September 3 punches into one employee-day", () => {
+  const armandoId = "armando-employee";
+  const employees = [{ id: armandoId, fullName: "Aquino, Armando Lantay", attendanceName: "Armando L. Aquino", biometricAliases: ["ARMANDO L. AQUINO", "ARMANDO AQUINO"], employmentStatus: "active", isDeleted: false }];
+  const rows = [mainHeader,
+    ["", "ARMANDO L. AQUINO", "3", "09/03/2026 07:47:18 AM", "C/In"],
+    ["", "ARMANDO AQUINO", "99", "09/03/2026 05:04:08 PM", "C/Out"],
+  ];
+  const result = aggregateMainAttendance(rows, employees, { "3": armandoId, "99": armandoId });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].employeeId, armandoId);
+  assert.equal(result[0].firstIn, "07:47:18");
+  assert.equal(result[0].lastOut, "17:04:08");
+  assert.equal(result[0].status, "complete");
+});
+
+test("deleted MAIN source hides a daily record while an active contributing source keeps it", () => {
+  const sourceA = "source-a";
+  const sourceB = "source-b";
+  const records = [
+    { id: "daily-923", employeeId: "employee-1", employeeName: "Employee", rawName: "EMPLOYEE", deviceNo: null, workDate: "2026-09-23", firstIn: "08:00:00", lastOut: "17:00:00", checkoutSource: "biometric", status: "complete", lateMinutes: 0, lateSeconds: 0, halfDay: false, undertimeMinutes: 0, sourceFileId: sourceA },
+  ] as const;
+  const links = [{ dailyAttendanceId: "daily-923", sourceFileId: sourceA }, { dailyAttendanceId: "daily-923", sourceFileId: sourceB }];
+  assert.equal(activeMainAttendanceRecordIds([...records], new Set(), links).has("daily-923"), false);
+  assert.equal(activeMainAttendanceRecordIds([...records], new Set([sourceB]), links).has("daily-923"), true);
+});
+
+test("manual attendance records are outside MAIN upload provenance", () => {
+  const manual = { id: "manual-1", sourceFileId: null, employeeId: "employee-1", employeeName: "Employee", rawName: "Employee", deviceNo: null, workDate: "2026-09-23", firstIn: "08:00:00", lastOut: "17:00:00", checkoutSource: "manual", status: "complete", lateMinutes: 0, lateSeconds: 0, halfDay: false, undertimeMinutes: 0 };
+  const manualRecords = [manual];
+  assert.equal(manualRecords.some((record) => record.id === "manual-1"), true);
+});
+
+test("MAIN active work dates produce September 2026 and September 9, 2026 filter inputs", () => {
+  const dates = mainWorkDateOptions([
+    { id: "daily-909", employeeId: "employee-1", employeeName: "Employee", rawName: "EMPLOYEE", deviceNo: null, workDate: "2026-09-09", firstIn: "08:00:00", lastOut: "17:00:00", checkoutSource: "biometric", status: "complete", lateMinutes: 0, lateSeconds: 0, halfDay: false, undertimeMinutes: 0 },
+  ]);
+  assert.deepEqual(dates, ["2026-09-09"]);
+  assert.deepEqual([...new Set(dates.map((date) => date.slice(0, 7)))], ["2026-09"]);
+  assert.equal(new Date("2026-09-09T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }), "September 9, 2026");
+  const deletedOnly = { id: "deleted-only", employeeId: "employee-1", employeeName: "Employee", rawName: "EMPLOYEE", deviceNo: null, workDate: "2026-09-23", firstIn: "08:00:00", lastOut: "17:00:00", checkoutSource: "biometric", status: "complete", lateMinutes: 0, lateSeconds: 0, halfDay: false, undertimeMinutes: 0, sourceFileId: "deleted-source" } as const;
+  assert.deepEqual(mainWorkDateOptions([deletedOnly].filter((record) => activeMainAttendanceRecordIds([record], new Set(), []).has(record.id))), []);
+});
+
+test("MAIN delete separates committed trash success from secondary refresh warnings", () => {
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const dashboard = readFileSync(new URL("../src/pages/Dashboard.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(context, /const deleteUploadedFile = async/);
+  assert.match(context, /await \(hrScope === "MAIN" \? deleteMainAttendanceUpload/);
+  assert.match(context, /setUploadedFiles\(\(current\) => current\.filter\(\(file\) => file\.id !== fileId\)\)/);
+  assert.match(context, /Promise\.allSettled\(\[[\s\S]*applyDatabaseData\(false\)[\s\S]*refreshDeletedAttendanceData\(false\)/);
+  assert.match(context, /success: true,[\s\S]*Attendance upload moved to Recycle Bin/);
+  assert.match(context, /some views could not be refreshed/);
+  assert.match(dashboard, /const result = await deleteUploadedFile/);
+  assert.match(dashboard, /if \(result\.success\)/);
+  assert.match(dashboard, /if \(result\.warning\) toast\.warning/);
+  assert.match(dashboard, /else toast\.error/);
+  assert.match(service, /rpc\("delete_main_attendance_upload"/);
+  const mainDelete = service.match(/export async function deleteMainAttendanceUpload[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.doesNotMatch(mainDelete, /reconcile_main_active_upload_records/);
+  assert.doesNotMatch(service.match(/createDeleteBatchId[\s\S]*?\n\}/)?.[0] ?? "", /return `b-/);
+});
+
+test("Recycle Bin Delete All is confirmed, scoped, sequential, and partial-failure aware", () => {
+  const page = readFileSync(new URL("../src/pages/RecycleBin.tsx", import.meta.url), "utf8");
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/035_permanently_delete_recycle_bin_item.sql", import.meta.url), "utf8");
+  assert.match(page, /deletedAttendanceCount > 0/);
+  assert.match(page, /title="Permanently delete all items\?"/);
+  assert.match(page, /This will permanently delete all items currently in your Recycle Bin\. This action cannot be undone\./);
+  assert.match(page, /confirmLabel="Delete All Permanently"/);
+  assert.match(page, /onCancel=\{\(\) => \(deleteAllBusy \? null : setDeleteAllOpen\(false\)\)\}/);
+  assert.match(context, /for \(const file of deletedAttendanceData\.uploadedFiles\)/);
+  assert.match(context, /for \(const record of deletedAttendanceData\.manualHrRecords\)/);
+  assert.match(context, /succeededFiles/);
+  assert.match(context, /succeededManual/);
+  assert.match(context, /failed \+= 1/);
+  assert.match(context, /Recycle Bin partially cleared/);
+  assert.match(service, /rpc\("permanently_delete_recycle_bin_item"/);
+  assert.match(migration, /expected_workspace:=public\.attendance_workspace\(\)/);
+  assert.match(migration, /public\.attendance_role\(\)<>'HR'/);
+  assert.match(migration, /workspace=expected_workspace and is_deleted and not removed_from_recycle_bin/);
+  assert.doesNotMatch(migration, /delete from public\.[a-z_]+\s*;/);
+  assert.match(migration, /f\.id<>file_id/);
+});
+
+test("migration 023 safely merges known historical aliases and preserves batch provenance", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/023_fix_main_delete_and_reconcile_aliases.sql", import.meta.url), "utf8");
+  assert.match(sql, /reconcile_main_unmatched_attendance/);
+  assert.match(sql, /main_biometric_mappings/); assert.match(sql, /main_biometric_aliases/);
+  assert.match(sql, /least\(t\.first_in,a\.first_in\)/); assert.match(sql, /greatest\(t\.last_out,a\.last_out\)/);
+  assert.match(sql, /main_attendance_sources/); assert.match(sql, /source_file_id<>p_file_id/);
+  assert.match(sql, /source_type='attendance_upload'/); assert.match(sql, /source_type='system_generated'/);
+  assert.doesNotMatch(sql, /source_type='manual'[^;]*is_deleted=true/s);
+  assert.match(sql, /continue/);
+});
+
+test("migration 034 restores canonical MAIN rows before generated attendance completes", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/034_restore_main_daily_attendance_on_import.sql", import.meta.url), "utf8");
+  const dailyUpsert = sql.indexOf("insert into public.main_daily_attendance");
+  const lateInsert = sql.indexOf("insert into public.late_records");
+  const absenceInsert = sql.indexOf("insert into public.absences");
+  assert.ok(dailyUpsert >= 0 && lateInsert > dailyUpsert && absenceInsert > dailyUpsert);
+  assert.match(sql, /last_time=nullif\(r->>'lastOut',''\)::time/);
+  assert.match(sql, /status=case when public\.main_daily_attendance\.checkout_source='manual' then 'complete' else excluded\.status end/);
+  assert.match(sql, /is_deleted=false,deleted_at=null,deleted_by=null,deleted_batch_id=null/);
+  assert.match(sql, /source_file_id=excluded\.source_file_id/);
+  assert.match(sql, /not exists\(select 1 from public\.main_daily_attendance a[\s\S]*not a\.is_deleted[\s\S]*a\.first_in is not null or a\.last_out is not null/);
+  assert.match(sql, /if last_time is not null and coalesce\(\(r->>'undertimeMinutes'\)::int,0\)>0/);
+  assert.doesNotMatch(sql, /exception when others/);
+});
+
+test("MAIN loader supplies active file names for provenance fallback and file-history dates", () => {
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(service, /from\("uploaded_files"\)\.select\("id, file_name"\)/);
+  assert.match(service, /activeSourceFileNames/);
+  assert.match(service, /activeMainAttendanceRecordIds/);
+});
+
+test("migration 024 fixes MAIN UUID boundaries and keeps delete limited to generated records", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/024_fix_main_uuid_and_delete.sql", import.meta.url), "utf8");
+  assert.match(sql, /create or replace function public\.reconcile_main_unmatched_attendance\(\)/);
+  assert.match(sql, /source_file_id in\(select source_file_id::text from public\.main_attendance_sources/);
+  assert.match(sql, /create or replace function public\.delete_main_attendance_upload\(p_file_id uuid,p_batch_id uuid\)/);
+  assert.match(sql, /public\.late_records[\s\S]*source_file_id=p_file_id::text/);
+  assert.match(sql, /public\.generated_undertimes[\s\S]*source_file_id=p_file_id::text/);
+  assert.match(sql, /public\.main_daily_attendance[\s\S]*d\.source_file_id=p_file_id/);
+  assert.match(sql, /public\.half_day_records[\s\S]*source_type='attendance_upload'/);
+  assert.match(sql, /public\.absences[\s\S]*source_type='system_generated'/);
+  assert.doesNotMatch(sql, /public\.manual_late_records[\s\S]*set is_deleted=true/);
+  assert.doesNotMatch(sql, /public\.manual_undertimes[\s\S]*set is_deleted=true/);
+  assert.match(sql, /least\(t\.first_in,a\.first_in\)/);
+  assert.match(sql, /greatest\(t\.last_out,a\.last_out\)/);
+  assert.match(sql, /join public\.employees emp on emp\.id=x\.employee_id/);
+});
+
+test("migration 026 reconciles orphaned MAIN generated records without touching manual records", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/026_fix_main_orphaned_generated_records.sql", import.meta.url), "utf8");
+  assert.match(sql, /reconcile_main_active_upload_records/);
+  assert.match(sql, /main_attendance_sources/);
+  assert.match(sql, /not exists\([\s\S]*uploaded_files/);
+  assert.match(sql, /source_type='attendance_upload'/);
+  assert.match(sql, /source_type='system_generated'/);
+  assert.doesNotMatch(sql, /source_type='manual'[\s\S]*is_deleted=true/);
+  assert.match(sql, /deleted_reason='orphaned_main_upload_source'/);
+});
+
+test("MAIN dashboard filters its daily summary and delegates month history", () => {
+  const dashboard = readFileSync(new URL("../src/pages/Dashboard.tsx", import.meta.url), "utf8");
+  const records = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+  assert.match(dashboard, /record\.workDate === selectedDayScope/);
+  assert.match(dashboard, /selectedDayScope !== "all"/);
+  assert.match(dashboard, /View Attendance Records/);
+  assert.doesNotMatch(dashboard, /mainDailyAttendance\.slice\(0, 100\)/);
+  assert.match(records, /All months/); assert.match(records, /All dates/); assert.match(records, /All employees/); assert.match(records, /All statuses/);
+});
+
+test("absence date scope uses one canonical local calendar date for Dashboard and Absences", () => {
+  assert.equal(normalizeAttendanceDate("09/22/2026"), "2026-09-22");
+  assert.equal(normalizeAttendanceDate("2026-09-22"), "2026-09-22");
+  assert.equal(matchesDateScope("09/22/2026", "2026-09", "2026-09-22"), true);
+  assert.equal(matchesDateScope("2026-09-22", "2026-09", "2026-09-22"), true);
+  assert.equal(matchesDateScope("09/22/2026", "2026-09", "2026-09-23"), false);
+  assert.equal(matchesDateScope("09/22/2026", "2026-09", "all"), true);
+  assert.equal(matchesDateScope("09/22/2026", "2026-08", "all"), false);
+  assert.equal(normalizeAttendanceDate("2026-09-22T00:00:00.000Z"), "2026-09-22");
+  assert.equal(normalizeAttendanceDate("2026-09-22T00:00:00"), "2026-09-22");
+});
+
+test("Dashboard and Absences page use the shared exact-day absence scope", () => {
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const absences = readFileSync(new URL("../src/pages/Absences.tsx", import.meta.url), "utf8");
+  assert.match(context, /matchesDateScope\(dateValue, selectedMonthScope, selectedDayScope\)/);
+  assert.match(absences, /matchesDateScope\(record\.date, scopeMonth, selectedDayScope\)/);
+});
+
+test("informed-person directory is scope-aware", () => {
+  const main = informedPeopleForScope("MAIN");
+  const itc = informedPeopleForScope("ITC");
+  assert.deepEqual(main, ["HR Marj", "Ma'am Jen", "Ma'am Alexis", "Ma'am Arielle", "Ma'am Reina", "Sir Marc"]);
+  assert.deepEqual(itc, ["Sir Gatch", "Ma’am Chona", "HR Louissa"]);
+  assert.equal(main.includes("Sir Gatch"), false);
+});
+
+test("MAIN absence correction actions are guarded and Undertime keeps checkout editing out", () => {
+  const absences = readFileSync(new URL("../src/pages/Absences.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const undertime = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  const attendanceRecords = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+  assert.match(absences, /hrScope === "MAIN" && record\.sourceType === "system_generated"/);
+  assert.match(service, /\.eq\("workspace", "WAIS"\)[\s\S]*\.eq\("source_type", "system_generated"\)/);
+  assert.match(service, /informed_to: informed/);
+  assert.match(service, /deleted_reason/);
+  assert.doesNotMatch(undertime, /Missing Check-Out|Save Manual Check-Out|saveManualCheckout/);
+  assert.match(attendanceRecords, /saveManualCheckout/);
+});
+
+test("MAIN Attendance Records uses human-readable month labels and editable checkout actions", () => {
+  const page = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+  assert.match(page, /const monthLabel/);
+  assert.match(page, /month: "long", year: "numeric"/);
+  assert.match(page, /<option value="all">All months<\/option>/);
+  assert.match(page, /value=\{m\}>\{monthLabel\(m\)\}/);
+  assert.match(page, /r\.employeeId \? <Button size="sm" onClick=\{\(\) => openCheckout\(r\)\}/);
+  assert.match(page, /r\.lastOut \? "Update Check-Out" : "Add Check-Out"/);
+  assert.match(page, /Current Last Out/);
+  assert.match(page, /Current Source/);
+  assert.match(page, /Final Check-Out Time/);
+  assert.match(page, /Optional Note/);
+});
+
+test("migration 027 preserves original biometric checkout and recalculates only generated undertime", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/027_preserve_main_biometric_checkout.sql", import.meta.url), "utf8");
+  assert.match(sql, /add column if not exists biometric_last_out time/);
+  assert.match(sql, /biometric_last_out=original_biometric/);
+  assert.match(sql, /original_biometric_last_out/);
+  assert.match(sql, /source_file_id::text/);
+  assert.match(sql, /generated_undertimes/);
+  assert.doesNotMatch(sql, /manual_undertimes[\s\S]*set is_deleted=true/);
+  assert.match(sql, /MAIN HR access required/);
+});
+
+test("MAIN stale-record cleanup uses the authenticated RPC and refreshes shared attendance state", () => {
+  const page = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(page, /Clean Stale Records/);
+  assert.match(page, /cleanMainStaleRecords/);
+  assert.match(context, /hrScope !== "MAIN" \|\| role !== "HR"/);
+  assert.match(context, /await reconcileMainActiveUploadRecords\(\)/);
+  assert.match(context, /await applyDatabaseData\(false\)/);
+  assert.match(context, /Stale system-generated attendance records were reconciled\./);
+  assert.match(service, /rpc\("reconcile_main_active_upload_records"\)/);
+});
+
+test("migration 022 keeps legal names, supports aliases, and deletes MAIN batches by provenance", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/022_main_attendance_aliases_and_batch_provenance.sql", import.meta.url), "utf8");
+  assert.match(sql, /attendance_name text/); assert.match(sql, /main_biometric_aliases/);
+  assert.match(sql, /'ARMANDO L\. AQUINO'/); assert.match(sql, /'ARMANDO AQUINO'/); assert.match(sql, /'3'/); assert.match(sql, /'99'/);
+  assert.match(sql, /source_file_id uuid references public\.uploaded_files\(id\)/);
+  assert.match(sql, /where source_file_id=p_file_id and source_type='attendance_upload'/);
+  assert.match(sql, /where source_file_id=p_file_id and source_type='system_generated'/);
+  assert.doesNotMatch(sql, /update public\.employees set full_name/i);
+});
+
+test("system absence comparison is MAIN roster only, eligibility-aware, and stable on re-run", () => {
+  const present = aggregateMainAttendance([mainHeader, ["", "ROGEL COLLERA", "7", "09/21/2026 08:00:00 AM", "C/In"]], mainEmployees);
+  assert.deepEqual(systemAbsenceEmployeeIds(mainEmployees, present, "2026-09-21"), ["main-other"]);
+  assert.deepEqual(systemAbsenceEmployeeIds(mainEmployees, present, "2026-09-21"), ["main-other"]);
+  assert.deepEqual(systemAbsenceEmployeeIds([...mainEmployees, { id: "future", fullName: "Future Person", employmentStatus: "active", isDeleted: false, startDate: "2027-01-01" }], present, "2026-09-21"), ["main-other"]);
+});
+
+test("MAIN migration makes system absences idempotent and preserves manual absences on correction", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/020_main_office_attendance.sql", import.meta.url), "utf8");
+  assert.match(sql, /absences_unique_system_generated/);
+  assert.match(sql, /source_type='system_generated'/);
+  assert.match(sql, /Corrected MAIN attendance import/);
+  assert.doesNotMatch(sql, /source_type='manual'.*is_deleted=true/s);
+  assert.match(sql, /attendance_hr_scope\(\)<>'MAIN'/);
+});
+
+test("MAIN upload keeps Employee UUID and biometric device No. in separate typed fields", () => {
+  const employeeUuid = "c6df6bbe-d58d-426d-a492-cf75665314b1";
+  const record = aggregateMainAttendance([mainHeader, ["", "ROGEL COLLERA", "37", "09/22/2026 07:46:38 AM", "C/In"], ["", "ROGEL COLLERA", "37", "09/22/2026 10:12:19 AM", "C/Out"]], [{ ...mainEmployees[0], id: employeeUuid }])[0];
+  assert.equal(record.employeeId, employeeUuid);
+  assert.equal(record.deviceNo, "37");
+  assert.notEqual(record.employeeId, record.deviceNo);
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(service, /p_records: records/);
+  assert.doesNotMatch(service, /p_device_no:\s*employee\.id|p_employee_id:\s*biometric/i);
+});
+
+test("migration 021 uses uploaded_files UUID type instead of bigint for MAIN source file IDs", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/021_fix_main_upload_id_and_half_day_reimport.sql", import.meta.url), "utf8");
+  assert.match(sql, /file_id public\.uploaded_files\.id%type/gi);
+  assert.doesNotMatch(sql, /file_id bigint/i);
+  assert.match(sql, /returning id into file_id/);
+});
+
+test("MAIN upload logs diagnostics but shows HR a safe production error", () => {
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  assert.match(context, /console\.error\("Upload failed:", error\)/);
+  assert.match(context, /MAIN Office attendance upload could not be completed\. Please contact the system administrator\./);
+});
+
+test("MAIN Half-Day re-import reconciles only system records and records aggregated First In", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/021_fix_main_upload_id_and_half_day_reimport.sql", import.meta.url), "utf8");
+  assert.match(sql, /source_type='attendance_upload' and not is_deleted/);
+  assert.match(sql, /set source_time_in=first_time/);
+  assert.match(sql, /source_type='manual'\)/);
+  assert.doesNotMatch(sql, /source_type='manual'[^;]*set is_deleted=true/s);
+  assert.match(sql, /perform public\.create_generated_half_day/);
+});
+
+test("leave duration uses working minutes and excludes weekday lunch", () => {
+  assert.deepEqual(calculateLeaveDuration("2026-09-07", "08:00", "17:00"), { minutes: 480, error: null });
+  assert.deepEqual(calculateLeaveDuration("2026-09-07", "08:00", "12:00"), { minutes: 240, error: null });
+  assert.deepEqual(calculateLeaveDuration("2026-09-07", "08:00", "10:30"), { minutes: 150, error: null });
+  assert.deepEqual(calculateLeaveDuration("2026-09-07", "11:00", "14:00"), { minutes: 120, error: null });
+  assert.match(calculateLeaveDuration("2026-09-07", "10:00", "09:00").error ?? "", /later/);
+});
+
+test("leave presentation formats Saturday full-day, dates, times, and statuses professionally", () => {
+  assert.deepEqual(calculateLeaveDuration("2026-09-12", "07:00", "15:15"), { minutes: 495, error: null });
+  assert.equal(formatLeaveRequestDuration("2026-09-12", "07:00", "15:15", 495), "1 day");
+  assert.equal(formatLeaveRequestDuration("2026-09-12", "07:00", "15:00", 480), "1 day");
+  assert.equal(formatLeaveDate("2026-09-12"), "09/12/2026");
+  assert.equal(formatLeaveTime("07:00"), "07:00 AM");
+  assert.equal(formatLeaveTime("15:15"), "03:15 PM");
+  assert.equal(formatLeaveStatus("approved"), "Approved");
+  assert.equal(formatLeaveStatus("pending"), "Pending");
+  assert.equal(formatLeaveStatus("rejected"), "Rejected");
+});
+
+test("leave balances use exact minutes and calendar-year records", () => {
+  assert.equal(ANNUAL_LEAVE_ENTITLEMENT_MINUTES, 2400);
+  assert.equal(formatLeaveMinutes(2400), "5 days");
+  assert.equal(formatLeaveMinutes(2160), "4 days 4 hours");
+  assert.equal(formatLeaveMinutes(1590), "3 days 2 hours 30 minutes");
+});
+
+test("MAIN rejected leave counts are employee, year, workspace, and active-record specific", () => {
+  const records = [
+    { employeeId: "a", leaveDate: "2026-01-02", status: "rejected" as const, workspace: "WAIS", isDeleted: false },
+    { employeeId: "a", leaveDate: "2026-02-02", status: "rejected" as const, workspace: "WAIS", isDeleted: false },
+    { employeeId: "a", leaveDate: "2026-03-02", status: "approved" as const, workspace: "WAIS", isDeleted: false },
+    { employeeId: "a", leaveDate: "2026-04-02", status: "pending" as const, workspace: "WAIS", isDeleted: false },
+    { employeeId: "a", leaveDate: "2026-05-02", status: "rejected" as const, workspace: "WAIS", isDeleted: true },
+    { employeeId: "a", leaveDate: "2025-05-02", status: "rejected" as const, workspace: "WAIS", isDeleted: false },
+    { employeeId: "a", leaveDate: "2026-06-02", status: "rejected" as const, workspace: "APP", isDeleted: false },
+    { employeeId: "b", leaveDate: "2026-01-02", status: "rejected" as const, workspace: "WAIS", isDeleted: false },
+  ];
+  assert.equal(countRejectedLeaveRequests(records, "a", 2026, "WAIS"), 2);
+  assert.equal(countRejectedLeaveRequests(records, "b", 2026, "WAIS"), 1);
+  assert.equal(countRejectedLeaveRequests(records, "a", 2025, "WAIS"), 1);
+  assert.equal(calculateAnnualLeaveTotals([{ leaveDate: "2026-01-02", status: "rejected", durationMinutes: 480 }], 2026, 0).remaining, ANNUAL_LEAVE_ENTITLEMENT_MINUTES);
+});
+
+test("Rejected Requests is MAIN-only in HR and Admin Leave registries", () => {
+  const registry = readFileSync(new URL("../src/components/leave/LeaveRegistry.tsx", import.meta.url), "utf8");
+  const leave = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
+  const admin = readFileSync(new URL("../src/components/leave/AdminLeaveApprovals.tsx", import.meta.url), "utf8");
+  assert.match(registry, /showRejectedRequests && <th[^>]*>Rejected Requests/);
+  assert.match(registry, /countRejectedLeaveRequests/);
+  assert.match(leave, /showRejectedRequests=\{hrScope === "MAIN"\}/);
+  assert.match(admin, /showRejectedRequests=\{hrScope === "MAIN"\}/);
+});
+
+test("MAIN exemption history filters and summaries compose without changing records", () => {
+  const records = [
+    { name: "Lasam, Christine Joy Yap", date: "2026-09-22", approvalStatus: "approved" as const, id: "1" },
+    { name: "Lasam, Christine Joy Yap", date: "2026-09-10", approvalStatus: "declined" as const, id: "2" },
+    { name: "Lasam, Christine Joy Yap", date: "2025-09-10", approvalStatus: "approved" as const, id: "3" },
+    { name: "Huerto, Joben Luciano", date: "2026-09-21", approvalStatus: "pending" as const, id: "4" },
+  ];
+  const combined = filterExemptionHistory(records, { search: "Christine Joy", year: "2026", month: "09", status: "approved", sort: "newest" });
+  assert.deepEqual(combined.map((item) => item.id), ["1"]);
+  assert.deepEqual(filterExemptionHistory(records, { search: "", year: "all", month: "all", status: "all", sort: "oldest" }).map((item) => item.id), ["3", "2", "4", "1"]);
+  const christine = filterExemptionHistory(records, { search: "Lasam", year: "2026", month: "all", status: "all", sort: "newest" });
+  assert.equal(christine.length, 2);
+  assert.equal(christine.filter((item) => item.approvalStatus === "approved").length, 1);
+  assert.equal(christine.filter((item) => item.approvalStatus === "declined").length, 1);
+  assert.equal(christine.filter((item) => item.approvalStatus === "pending").length, 0);
+});
+
+test("MAIN exemption history UI is scope-aware and preserves record actions", () => {
+  const page = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  assert.match(page, /title="Search & Filters"/);
+  assert.match(page, /placeholder="Search employee"/);
+  assert.match(page, /All Years/); assert.match(page, /All Months/); assert.match(page, /All Statuses/);
+  assert.match(page, /Newest First/); assert.match(page, /Oldest First/);
+  assert.match(page, /Total Requests/); assert.match(page, /exemptionSummary\.approved/); assert.match(page, /exemptionSummary\.declined/); assert.match(page, /exemptionSummary\.pending/);
+  assert.match(page, /Restore Late Record/); assert.match(page, /setDeleteTarget/);
+  assert.match(page, /filterExemptionHistory\(exemptions/);
+  assert.match(page, /hrScope/);
+});
+
+test("ITC exemptions share the MAIN search, filter, sort, and summary experience", () => {
+  const page = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  assert.match(page, /filterExemptionHistory\(exemptions/);
+  assert.match(page, /Search Employee/);
+  assert.match(page, /All Years/);
+  assert.match(page, /All Months/);
+  assert.match(page, /All Statuses/);
+  assert.match(page, /Newest First/);
+  assert.match(page, /Oldest First/);
+  assert.match(page, /Total Requests/);
+  assert.match(page, /exemptionSummary\.pending/);
+});
+
+test("late and undertime records retain Employee Master UUIDs and forms use linked source records", () => {
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const employees = readFileSync(new URL("../src/pages/EmployeesPage.tsx", import.meta.url), "utf8");
+  const exemptions = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  const undertime = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  assert.match(service, /employeeId: record\.employee_id == null \? undefined : String\(record\.employee_id\)/);
+  assert.match(employees, /const employeeById = new Map/);
+  assert.match(employees, /Array\.from\(new Set\(map\.values\(\)\)\)/);
+  assert.doesNotMatch(exemptions, /label="Time \(optional\)"/);
+  assert.doesNotMatch(undertime, /label="From time"/);
+  assert.doesNotMatch(undertime, /label="To time"/);
+  assert.match(undertime, /Matching Attendance Record/);
+  assert.match(undertime, /Add informed person \(optional\)/);
+});
+
+test("leave balance uses a manual offset and approved usage", () => {
+  assert.equal(leaveBalance(-480, 240), 1680);
+  assert.equal(leaveBalance(0, 0), 2400);
+  assert.equal(leaveBalance(-960, 480), 960);
+  assert.equal(adjustmentPartsToMinutes(1, 2, 30), 630);
+});
+
+test("desired remaining leave supports minute balances even with approved history", () => {
+  const approved = 480;
+  const twoHours = adjustmentPartsToMinutes(0, 2, 0);
+  const oneDayFourHours = adjustmentPartsToMinutes(1, 4, 0);
+  const fiveDays = adjustmentPartsToMinutes(5, 0, 0);
+  assert.equal(leaveBalance(remainingLeaveAdjustment(twoHours, approved), approved), 120);
+  assert.equal(leaveBalance(remainingLeaveAdjustment(oneDayFourHours, approved), approved), 720);
+  assert.equal(leaveBalance(remainingLeaveAdjustment(fiveDays, approved), approved), 2400);
+  assert.ok(adjustmentPartsToMinutes(5, 1, 0) > ANNUAL_LEAVE_ENTITLEMENT_MINUTES);
+});
+
+test("annual leave totals isolate years and only approved leave reduces remaining", () => {
+  const records = [
+    { leaveDate: "2026-02-01", status: "approved" as const, durationMinutes: 240 },
+    { leaveDate: "2026-03-01", status: "pending" as const, durationMinutes: 480 },
+    { leaveDate: "2026-04-01", status: "rejected" as const, durationMinutes: 480 },
+    { leaveDate: "2027-01-01", status: "approved" as const, durationMinutes: 480 },
+  ];
+  assert.deepEqual(calculateAnnualLeaveTotals(records, 2026, -480), { adjustment: -480, approved: 240, pending: 480, remaining: 1680 });
+  assert.deepEqual(calculateAnnualLeaveTotals(records, 2027, 0), { adjustment: 0, approved: 480, pending: 0, remaining: 1920 });
+});
+
+test("leave informed-person validation uses selected chips instead of the search input", () => {
+  const page = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
+  const informedSelector = page.match(/<SearchableCombobox label="Who was informed"[\s\S]*?\/>/)?.[0] ?? "";
+  assert.ok(informedSelector);
+  assert.doesNotMatch(informedSelector, /\brequired\b/);
+  assert.match(page, /form\.informed\.length === 0/);
+  assert.match(page, /informedParties: form\.informed/);
+});
+
+test("leave registry starts from all active employees and keeps request history real", () => {
+  const page = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
+  const admin = readFileSync(new URL("../src/components/leave/AdminLeaveApprovals.tsx", import.meta.url), "utf8");
+  const registry = readFileSync(new URL("../src/components/leave/LeaveRegistry.tsx", import.meta.url), "utf8");
+  assert.match(page, /employees=\{activeEmployees\}/);
+  assert.match(page, /canEditAdjustments/);
+  assert.match(admin, /employees=\{activeEmployees\}/);
+  assert.doesNotMatch(admin, /canEditAdjustments/);
+  assert.match(registry, /employees\.filter/);
+  assert.match(registry, /selectedHistory = requests\.filter/);
+  assert.match(registry, /employee\.employer/);
+  assert.doesNotMatch(registry, />Prior Used Leave</);
+  assert.doesNotMatch(registry, />Reviewer</);
+  assert.doesNotMatch(registry, /item\.reviewedBy/);
+  assert.match(registry, /value\.approved > 0 \? formatLeaveMinutes\(value\.approved\) : ""/);
+  assert.match(registry, /value\.pending > 0 \? formatLeaveMinutes\(value\.pending\) : ""/);
+  assert.doesNotMatch(admin, /Submitted by:/);
+  assert.match(registry, /Edit Remaining Leave/);
+  assert.doesNotMatch(registry, /Opening\/Prior Leave Used/);
+  assert.match(registry, /Cancel Request/);
+  assert.match(registry, />Remove</);
+});
+
+test("remaining leave editor uses labeled balance fields without remarks", () => {
+  const registry = readFileSync(new URL("../src/components/leave/LeaveRegistry.tsx", import.meta.url), "utf8");
+  const editor = registry.match(/Edit Remaining Leave[\s\S]*?Save Remaining Leave/)?.[0] ?? "";
+  assert.match(editor, /label="Employee Name"/);
+  assert.match(editor, /label="Days"/);
+  assert.match(editor, /label="Hours"/);
+  assert.match(editor, /label="Minutes"/);
+  assert.doesNotMatch(editor, /Remarks/);
+});
+
+test("Admin exemption history is searchable and pending cards use a subtle warning treatment", () => {
+  const approvals = readFileSync(new URL("../src/pages/AdminApprovals.tsx", import.meta.url), "utf8");
+  assert.match(approvals, /historySearch/);
+  assert.match(approvals, /filteredHistory = history\.filter/);
+  assert.match(approvals, /Search employee name/);
+  assert.match(approvals, /exemption \{filteredHistory\.length === 1 \? "record" : "records"\}/);
+  assert.match(approvals, /border-warning-200 bg-white/);
+  assert.doesNotMatch(approvals, /bg-slate-950\/20/);
+});
+
+test("WATTS branding uses the shared electrical icon and reusable creator credit", () => {
+  const layout = readFileSync(new URL("../src/components/layout/RootLayout.tsx", import.meta.url), "utf8");
+  const login = readFileSync(new URL("../src/pages/LoginPage.tsx", import.meta.url), "utf8");
+  const branding = readFileSync(new URL("../src/config/branding.ts", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const icon = readFileSync(new URL("../public/watts-icon.svg", import.meta.url), "utf8");
+  assert.match(layout, /<WattsIcon/);
+  assert.match(login, /<WattsIcon/);
+  assert.doesNotMatch(layout, /CREATOR_CREDIT/);
+  assert.match(branding, /CREATOR_NAME = "Nathaniel"/);
+  assert.match(html, /\/watts-icon\.svg/);
+  assert.match(icon, /<circle/);
+  assert.match(icon, /#1d4ed8/);
+  assert.match(icon, /#facc15/);
+});
+
+test("global footer and public information routes expose no fake support link", () => {
+  const routes = readFileSync(new URL("../src/app/routes.tsx", import.meta.url), "utf8");
+  const footer = readFileSync(new URL("../src/components/layout/AppFooter.tsx", import.meta.url), "utf8");
+  const branding = readFileSync(new URL("../src/config/branding.ts", import.meta.url), "utf8");
+  const layout = readFileSync(new URL("../src/components/layout/RootLayout.tsx", import.meta.url), "utf8");
+  const login = readFileSync(new URL("../src/pages/LoginPage.tsx", import.meta.url), "utf8");
+  assert.match(routes, /path: "\/about"/);
+  assert.match(routes, /path: "\/privacy"/);
+  assert.match(routes, /path: "\/contact"/);
+  assert.match(footer, /Support this project/);
+  assert.match(footer, /Buy me a coffee/);
+  assert.match(footer, /to="\/privacy"/);
+  assert.match(branding, /SUPPORT_URL: string \| null = null/);
+  assert.match(layout, /<AppFooter compact/);
+  assert.match(login, /<AppFooter/);
+});
+
+test("public information header follows the existing authentication state", () => {
+  const publicPage = readFileSync(new URL("../src/components/layout/PublicInfoPage.tsx", import.meta.url), "utf8");
+  assert.match(publicPage, /useAuth\(\)/);
+  assert.match(publicPage, /user \? "Back to Dashboard" : "Sign in"/);
+  assert.match(publicPage, /to=\{user \? "\/" : "\/login"\}/);
+  assert.match(publicPage, /!loading/);
+});
+
+test("Undertime keeps its desktop form sticky and bounds the manual record list", () => {
+  const page = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  assert.match(page, /xl:grid-cols-\[360px_minmax\(0,1fr\)\]/);
+  assert.match(page, /xl:sticky xl:top-20/);
+  assert.doesNotMatch(page, /lg:sticky/);
+  assert.match(page, /xl:max-h-\[calc\(100vh-15rem\)\]/);
+  assert.match(page, /xl:overflow-y-auto/);
+  assert.match(page, /title="Manual Undertime Records"/);
+  assert.match(page, /Restore/);
+  assert.match(page, /Delete/);
+});
+
+test("sidebar navigation is grouped without removing Undertime or role filters", () => {
+  const layout = readFileSync(new URL("../src/components/layout/RootLayout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /label: "Overview"/);
+  assert.match(layout, /label: "Attendance Management"/);
+  assert.match(layout, /label: "System"/);
+  assert.match(layout, /name: "Undertime", href: "\/undertime"/);
+  assert.match(layout, /visibleItems = group\.items\.filter/);
+  assert.match(layout, /bg-brand-50 text-brand-700/);
+});
+
+test("migration 017 derives remaining leave from one year-specific adjustment and audits changes", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/017_leave_requests.sql", import.meta.url), "utf8");
+  assert.match(migration, /create table if not exists public\.employee_leave_adjustments/);
+  assert.match(migration, /unique \(employee_id, leave_year\)/);
+  assert.match(migration, /adjustment_minutes integer not null check \(adjustment_minutes between -2400 and 2400\)/);
+  assert.match(migration, /Only HR can edit remaining leave/);
+  assert.match(migration, /on conflict\(employee_id,leave_year\) do update/);
+  assert.match(migration, /new_adjustment=p_remaining_minutes\+approved_minutes-2400/);
+  assert.match(migration, /previous_remaining_minutes/);
+  assert.match(migration, /new_remaining_minutes/);
+  assert.match(migration, /action,payload/);
+  assert.match(migration, /extract\(year from leave_date\)=p_leave_year/);
+});
+
+test("leave cancellation, approved removal, and active duplicate protection are enforced", () => {
+  const page = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/leaveService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/017_leave_requests.sql", import.meta.url), "utf8");
+  assert.match(page, /item\.status === "pending" \|\| item\.status === "approved"/);
+  assert.match(page, /An active leave request already exists for this employee on this date/);
+  assert.match(service, /rpc\("cancel_pending_leave_request"/);
+  assert.match(service, /rpc\("remove_leave_request"/);
+  assert.match(migration, /unique index if not exists leave_requests_active_employee_date_uidx/);
+  assert.match(migration, /status in \('pending','approved'\)/);
+  assert.match(migration, /deleted_reason='leave_request_cancelled'/);
+  assert.match(migration, /deleted_reason=x\.status\|\|'_leave_removed: '/);
+  assert.match(migration, /x\.submitted_by <> auth\.uid\(\)/);
+  assert.match(migration, /Removal reason required/);
+  assert.match(migration, /x\.status not in \('approved','rejected'\)/);
+});
+
+test("migration 018 repairs legacy remaining-balance validation and rejected removal", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/018_fix_leave_remaining_and_rejected_removal.sql", import.meta.url), "utf8");
+  assert.match(migration, /drop constraint if exists employee_leave_adjustments_adjustment_minutes_check/);
+  assert.match(migration, /adjustment_minutes between -2400 and 2400/);
+  assert.match(migration, /new_adjustment=p_remaining_minutes\+approved_minutes-2400/);
+  assert.match(migration, /status not in \('approved','rejected'\)/);
+  assert.match(migration, /is_deleted=true,deleted_at=now\(\),deleted_by=auth\.uid\(\)/);
+});
+
+test("leave migration enforces role review, pending-only approval, and derived balance safety", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/017_leave_requests.sql", import.meta.url), "utf8");
+  assert.match(migration, /coalesce\(public\.attendance_role\(\),''\) <> 'HR'/);
+  assert.match(migration, /coalesce\(public\.attendance_role\(\),''\) <> 'Admin'/);
+  assert.match(migration, /x\.status <> 'pending'/);
+  assert.match(migration, /sum\(duration_minutes\)/);
+  assert.match(migration, /used_minutes \+ x\.duration_minutes > 2400 \+ coalesce\(balance_adjustment,0\)/);
+  assert.match(migration, /p_duration_minutes<>chargeable/);
+  assert.match(migration, /where id=x\.employee_id for update/);
+});
 
 test("login account choices use the four existing account emails", () => {
   assert.deepEqual(LOGIN_ACCOUNTS.map((account) => account.label), ["APP HR", "APP Admin", "WAIS HR", "WAIS Admin"]);
@@ -15,9 +816,13 @@ test("Admin routes exclude HR entry and approval actions are Admin-only", () => 
   assert.equal(canAccessPath("Admin", "/"), true);
   assert.equal(canAccessPath("Admin", "/employees"), true);
   assert.equal(canAccessPath("Admin", "/approvals"), true);
+  assert.equal(canAccessPath("Admin", "/absence-records"), true);
+  assert.equal(canAccessPath("Admin", "/leave"), false);
   assert.equal(canAccessPath("Admin", "/exemptions"), false);
   assert.equal(canAccessPath("HR", "/approvals"), false);
   assert.equal(canAccessPath("HR", "/undertime"), true);
+  assert.equal(canAccessPath("HR", "/leave"), true);
+  assert.equal(canAccessPath("HR", "/absence-records"), false);
 });
 
 test("undertime duration must be positive and is formatted readably", () => {
@@ -192,10 +997,13 @@ test("rendered Submit button uses only visible exemption fields", () => {
 test("optional informed people and exact manual-undertime source linkage are preserved", () => {
   const absence = readFileSync(new URL("../src/pages/Absences.tsx", import.meta.url), "utf8");
   const undertime = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
-  assert.match(absence, /Informed to[\s\S]*?\(optional\)/);
+  assert.match(absence, /Add informed person \(optional\)/);
   assert.match(undertime, /Matching Attendance Record/);
-  assert.match(undertime, /sourceLateRecordId: sourceRecordId/);
-  assert.match(undertime, /Informed to[\s\S]*?\(optional\)/);
+  assert.match(undertime, /sourceLateRecordId: hrScope === "MAIN" \? undefined : sourceRecordId/);
+  assert.match(undertime, /sourceAttendanceRecordId: hrScope === "MAIN" \? sourceRecordId : undefined/);
+  assert.match(undertime, /Add informed person \(optional\)/);
+  assert.doesNotMatch(undertime, /<Input label="From time"/);
+  assert.doesNotMatch(undertime, /<Input label="To time"/);
   assert.deepEqual(attendanceRecordRange("2026-09-07", "9:03:00 AM"), { kind: "undertime", from: "08:00", to: "09:03", minutes: 63 });
 });
 
@@ -251,11 +1059,13 @@ test("Half-Day records follow the shared all, month, and exact-date scope", () =
   assert.equal(halfDayMatchesScope("2026-09-07", "2026-09", "2026-09-08"), false);
 });
 
-test("Half-Day tabs separate system and manual records and system cards show Time In", () => {
+test("Half-Day tabs separate system and manual records and MAIN system cards show First In", () => {
   const page = readFileSync(new URL("../src/pages/HalfDay.tsx", import.meta.url), "utf8");
   assert.match(page, /record\.sourceType === "attendance_upload"/);
   assert.match(page, /record\.sourceType === "manual"/);
-  assert.match(page, />Time In</);
+  assert.match(page, /hrScope === "MAIN"/);
+  assert.match(page, />First In</);
+  assert.match(page, /displayDate\(record\.workDate\)/);
   assert.match(page, /formatTime12HourWithOptionalSeconds\(record\.sourceTimeIn\)/);
   assert.match(page, /createStagedHalfDay/);
   assert.match(page, /deleteStagedHalfDay/);
@@ -365,10 +1175,11 @@ test("employee or date changes clear a stale matching-late selection", () => {
 test("forms keep searchable active-employee dropdowns and searchable informed-person selectors", () => {
   const exemptions = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
   const undertime = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  const informedPeople = readFileSync(new URL("../src/utils/informedPeople.ts", import.meta.url), "utf8");
   assert.match(exemptions, /SearchableCombobox/);
   assert.match(undertime, /SearchableCombobox/);
-  assert.match(exemptions, /HR Louissa/);
-  assert.match(undertime, /Informed to/);
+  assert.match(informedPeople, /HR Louissa/);
+  assert.match(undertime, /Add informed person/);
 });
 
 test("QA fixes guard duplicate manual records and legacy informed values", () => {
@@ -380,12 +1191,44 @@ test("QA fixes guard duplicate manual records and legacy informed values", () =>
   assert.match(undertime, /Array\.isArray\(record\.informed\)/);
 });
 
-test("Half-Day loads both workspaces and uses the protected delete function", () => {
+test("Half-Day loads only the signed-in workspace and uses the protected delete function", () => {
   const page = readFileSync(new URL("../src/pages/HalfDay.tsx", import.meta.url), "utf8");
   const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
   assert.doesNotMatch(page, /Search employee/);
-  assert.match(service, /export async function loadStagedHalfDays\(\)/);
+  assert.match(service, /export async function loadStagedHalfDays\(workspace: Workspace\)/);
+  assert.match(service, /\.from\("half_day_records"\)[\s\S]*?\.eq\("workspace", workspace\)/);
   assert.match(service, /rpc\("delete_half_day"/);
+});
+
+test("employee ownership separates employer from HR scope and seeds MAIN safely", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/019_employee_hr_scope.sql", import.meta.url), "utf8");
+  const employees = readFileSync(new URL("../src/context/EmployeesContext.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/employeeService.ts", import.meta.url), "utf8");
+  assert.match(migration, /add column if not exists employer text/);
+  assert.match(migration, /add column if not exists hr_scope text/);
+  assert.match(migration, /hr_scope=coalesce\(hr_scope,'ITC'\), workspace='APP'/);
+  assert.match(migration, /employees_unique_employee_number/);
+  assert.equal((migration.match(/\('(?:W|M)-\d{7}'/g) ?? []).length, 13);
+  assert.match(migration, /'M-5009402','Aquino, Armando Lantay','M2B'/);
+  assert.match(migration, /source_regular_year,position/);
+  assert.match(migration, /null::date,null::date,1994/);
+  assert.match(employees, /listEmployees\(hrScope\)/);
+  assert.match(service, /\.eq\("hr_scope", hrScope\)/);
+  assert.match(service, /workspace: input\.hrScope === "MAIN" \? "WAIS" : "APP"/);
+});
+
+test("WAIS and APP workflow reads are scoped before approval", () => {
+  const attendance = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const leave = readFileSync(new URL("../src/services/leaveService.ts", import.meta.url), "utf8");
+  const notifications = readFileSync(new URL("../src/services/notificationService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/019_employee_hr_scope.sql", import.meta.url), "utf8");
+  assert.match(attendance, /loadCrossWorkspaceExemptionWorkflowData\(workspace: Workspace\)/);
+  assert.match(attendance, /loadCrossWorkspaceAbsences\(workspace: Workspace\)/);
+  assert.match(leave, /listLeaveRequests\(workspace: Workspace\)/);
+  assert.match(leave, /listEmployeeLeaveAdjustments\(workspace: Workspace\)/);
+  assert.match(notifications, /\.eq\("workspace", workspace\)/);
+  assert.match(migration, /x\.workspace<>public\.attendance_workspace\(\)/);
+  assert.match(migration, /workspace=public\.attendance_workspace\(\)/);
 });
 
 test("decline status and Half-Day deletion are prepared by the forward-only patch", () => {
@@ -446,9 +1289,230 @@ test("attendance workflows call only the protected production RPCs", () => {
   assert.match(halfDayPage, /createStagedHalfDay/);
 });
 
+test("scoped exemption review keeps MAIN approval secure and logs RPC failures", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/028_fix_scoped_exemption_review.sql", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(migration, /attendance_hr_scope\(\).*MAIN.*WAIS/s);
+  assert.match(migration, /x\.workspace<>expected_workspace/);
+  assert.match(migration, /l\.workspace<>expected_workspace/);
+  assert.match(migration, /l\.work_date<>x\.work_date/);
+  assert.match(migration, /employee_name_key\(l\.employee_name\).*employee_name_key\(e\.full_name\)/);
+  assert.match(service, /MAIN\/ITC exemption review RPC failed/);
+  assert.match(service, /code: error\.code/);
+  assert.match(service, /details: error\.details/);
+  assert.match(service, /hint: error\.hint/);
+});
+
+test("exemption review sets the protected approval marker before updating approval fields", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/029_fix_exemption_approval_trigger_guard.sql", import.meta.url), "utf8");
+  const markerIndex = migration.indexOf("perform set_config('app.approval_review', '1', true);");
+  const updateIndex = migration.indexOf("update public.exemptions");
+
+  assert.notEqual(markerIndex, -1);
+  assert.notEqual(updateIndex, -1);
+  assert.ok(markerIndex < updateIndex);
+  assert.match(migration, /if auth\.uid\(\) is null or public\.attendance_role\(\)<>'Admin'/);
+  assert.match(migration, /if p_status not in \('approved','declined'\)/);
+  assert.match(migration, /if x\.submitted_by=auth\.uid\(\) then/);
+  assert.match(migration, /and hr_scope=public\.attendance_hr_scope\(\)/);
+  assert.match(migration, /l\.work_date<>x\.work_date/);
+  assert.match(migration, /l\.workspace<>expected_workspace/);
+  assert.match(migration, /public\.employee_name_key\(l\.employee_name\)<>public\.employee_name_key\(e\.full_name\)/);
+  assert.match(migration, /set approval_status=p_status/);
+  assert.match(migration, /set approval_status=p_status/);
+  assert.match(migration, /p_status not in \('approved','declined'\)/);
+});
+
+test("exemption approve and decline use the same protected review RPC", () => {
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const approvalsPage = readFileSync(new URL("../src/pages/AdminApprovals.tsx", import.meta.url), "utf8");
+  const leaveMigration = readFileSync(new URL("../supabase/migrations/019_employee_hr_scope.sql", import.meta.url), "utf8");
+  const guardMigration = readFileSync(new URL("../supabase/migrations/029_fix_exemption_approval_trigger_guard.sql", import.meta.url), "utf8");
+
+  assert.match(service, /rpc\("review_exemption", \{ p_id: id, p_status: status, p_remarks: remarks \|\| null \}\)/);
+  assert.match(approvalsPage, /reviewStagedExemption\(numericId, status/);
+  assert.match(leaveMigration, /create or replace function public\.review_leave_request/);
+  assert.doesNotMatch(leaveMigration, /app\.approval_review/);
+  assert.doesNotMatch(guardMigration, /drop trigger|drop function|alter table/);
+});
+
+test("MAIN manual absences can precede uploads and take precedence over generated absences", () => {
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/030_main_manual_absence_precedence.sql", import.meta.url), "utf8");
+
+  assert.match(context, /hrScope !== "MAIN" && !uploadedAvailableDates\.includes\(absenceDate\)/);
+  assert.match(service, /employee_id: absence\.employeeId \?\? null/);
+  assert.match(migration, /new\.source_type='system_generated'/);
+  assert.match(migration, /a\.source_type='manual'/);
+  assert.match(migration, /Superseded by MAIN manual absence/);
+  assert.match(migration, /return null/);
+});
+
+test("MAIN Absence uniqueness rejects manual conflicts and skips generated conflicts", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/031_enforce_main_absence_uniqueness.sql", import.meta.url), "utf8");
+  assert.match(migration, /create unique index absences_unique_main_active_employee_date/);
+  assert.match(migration, /where workspace='WAIS' and employee_id is not null and not is_deleted/);
+  assert.match(migration, /new\.source_type='system_generated'/);
+  assert.match(migration, /return null/);
+  assert.match(migration, /An absence record already exists for this employee and date\./);
+  assert.match(migration, /duplicate_active_main_absence_reconciled/);
+  assert.match(migration, /source_type='manual'\) desc/);
+  assert.match(migration, /a\.id is distinct from new\.id/);
+});
+
+test("MAIN Absence duplicate identity is employee UUID plus work date and leaves ITC outside the index", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/031_enforce_main_absence_uniqueness.sql", import.meta.url), "utf8");
+  assert.match(migration, /partition by employee_id, work_date/);
+  assert.match(migration, /where workspace='WAIS'/);
+  assert.doesNotMatch(migration, /where workspace in \('APP','WAIS'\)/);
+});
+
+test("MAIN Leave classification stays independent from the leave decision", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/032_main_leave_attendance_classification.sql", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/leaveService.ts", import.meta.url), "utf8");
+  const admin = readFileSync(new URL("../src/components/leave/AdminLeaveApprovals.tsx", import.meta.url), "utf8");
+  const registry = readFileSync(new URL("../src/components/leave/LeaveRegistry.tsx", import.meta.url), "utf8");
+
+  assert.match(migration, /attendance_classification text/);
+  assert.match(migration, /p_classification not in \('excused','unexcused'\)/);
+  assert.match(migration, /p_status not in \('approved','rejected'\)/);
+  assert.match(migration, /attendance_classification=p_classification/);
+  assert.match(migration, /status=p_status/);
+  assert.match(migration, /if p_status='approved'/);
+  assert.match(service, /review_leave_request_main/);
+  assert.match(admin, /Attendance Classification/);
+  assert.match(admin, /Leave Decision/);
+  assert.match(admin, /classification \|\| !decisions/);
+  assert.match(registry, /Attendance/);
+  assert.match(registry, /Not recorded/);
+});
+
+test("ITC Leave keeps the existing review RPC path", () => {
+  const service = readFileSync(new URL("../src/services/leaveService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/019_employee_hr_scope.sql", import.meta.url), "utf8");
+  assert.match(service, /const functionName = classification \? "review_leave_request_main" : "review_leave_request"/);
+  assert.match(migration, /create or replace function public\.review_leave_request\(p_id uuid,p_status text,p_remarks text default null\)/);
+});
+
+test("MAIN checkout notes are loaded and prefilled without changing biometric checkout", () => {
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/027_preserve_main_biometric_checkout.sql", import.meta.url), "utf8");
+
+  assert.match(service, /manualCheckoutNote: row\.manual_checkout_note \?\? null/);
+  assert.match(page, /setCheckoutNote\(record\.manualCheckoutNote \?\? ""\)/);
+  assert.match(page, /Current Note/);
+  assert.match(migration, /manual_checkout_note=nullif\(btrim\(p_note\),''\)/);
+  assert.match(migration, /biometric_last_out=original_biometric/);
+});
+
+test("MAIN Admin can view Attendance Records but cannot use HR actions", () => {
+  const routes = readFileSync(new URL("../src/app/routes.tsx", import.meta.url), "utf8");
+  const layout = readFileSync(new URL("../src/components/layout/RootLayout.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+
+  assert.match(routes, /attendance-records", element: <ProtectedRoute allowedRoles=\{\["Admin", "HR"\]\}/);
+  assert.match(layout, /Attendance Records", href: "\/attendance-records", icon: ListChecks, roles: \["Admin", "HR"\], mainOnly: true/);
+  assert.match(page, /const canManage = role === "HR"/);
+  assert.match(page, /\{canManage && checkoutRecord/);
+  assert.match(page, /Maintenance/);
+});
+
 test("Admin dashboard gates upload, export, and file history behind the HR role", () => {
   const dashboard = readFileSync(new URL("../src/pages/Dashboard.tsx", import.meta.url), "utf8");
   assert.match(dashboard, /\{isHr && <Button[\s\S]*?Export Excel/);
   assert.match(dashboard, /\{isHr && <>[\s\S]*?title="Imports & Reports"[\s\S]*?title="Uploaded Attendance Files"/);
   assert.match(dashboard, /\{isHr && <StatCard[\s\S]*?label="Files Uploaded"/);
+});
+
+test("employee profile photos use Employee Master UUID paths and a private scoped bucket", () => {
+  const service = readFileSync(new URL("../src/services/employeeService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/036_employee_profile_pictures.sql", import.meta.url), "utf8");
+  assert.match(service, /employees\/\$\{employee\.id\}\/profile-/);
+  assert.match(service, /profile_photo_path/);
+  assert.match(migration, /profile_photo_path text/);
+  assert.match(migration, /'employee-profile-pictures'.*false/s);
+  assert.match(migration, /e\.hr_scope=public\.attendance_hr_scope\(\)/);
+  assert.match(migration, /public\.attendance_role\(\)='HR'/);
+});
+
+test("profile photo upload validates supported images and the two megabyte limit", () => {
+  const service = readFileSync(new URL("../src/services/employeeService.ts", import.meta.url), "utf8");
+  assert.match(service, /"image\/jpeg": "jpg"/);
+  assert.match(service, /"image\/png": "png"/);
+  assert.match(service, /"image\/webp": "webp"/);
+  assert.match(service, /2 \* 1024 \* 1024/);
+  assert.match(service, /Please select a JPG, PNG, or WebP image/);
+  assert.match(service, /Profile photo must be 2 MB or smaller/);
+});
+
+test("photo replacement updates Employee Master before deleting the old object", () => {
+  const service = readFileSync(new URL("../src/services/employeeService.ts", import.meta.url), "utf8");
+  const updateIndex = service.indexOf('update({ profile_photo_path: path })');
+  const oldDeleteIndex = service.indexOf('remove([employee.profilePhotoPath])');
+  assert.ok(updateIndex > -1 && oldDeleteIndex > updateIndex);
+  assert.match(service, /update\(\{ profile_photo_path: null \}\)/);
+});
+
+test("shared EmployeeAvatar resolves current Employee Master photo and falls back to initials", () => {
+  const avatar = readFileSync(new URL("../src/components/employees/EmployeeAvatar.tsx", import.meta.url), "utf8");
+  assert.match(avatar, /employees\.find/);
+  assert.match(avatar, /item\.id === employeeId/);
+  assert.match(avatar, /employeeInitials\(name\)/);
+  assert.match(avatar, /onError=\{\(\) => setFailed\(true\)\}/);
+  assert.match(avatar, /loading="lazy"/);
+});
+
+test("employee photos are presented across employee attendance and approval views", () => {
+  const files = [
+    "../src/pages/EmployeesPage.tsx", "../src/pages/AttendanceRecords.tsx",
+    "../src/pages/LateRecords.tsx", "../src/pages/Absences.tsx",
+    "../src/pages/Exemptions.tsx", "../src/pages/Undertime.tsx",
+    "../src/pages/HalfDay.tsx", "../src/pages/AdminApprovals.tsx",
+    "../src/components/leave/LeaveRegistry.tsx", "../src/components/leave/AdminLeaveApprovals.tsx",
+  ];
+  for (const file of files) assert.match(readFileSync(new URL(file, import.meta.url), "utf8"), /EmployeeAvatar/);
+});
+
+test("migration 037 enforces canonical undertime identity and manual precedence", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/037_undertime_identity_and_precedence.sql", import.meta.url), "utf8");
+  assert.match(migration, /generated_undertimes[\s\S]*?employee_id uuid references public\.employees\(id\)/);
+  assert.match(migration, /manual_undertimes[\s\S]*?source_attendance_id uuid references public\.main_daily_attendance\(id\)/);
+  assert.match(migration, /on public\.generated_undertimes\(workspace,employee_id,work_date\)[\s\S]*?where not is_deleted and employee_id is not null/);
+  assert.match(migration, /on public\.manual_undertimes\(workspace,employee_id,work_date\)[\s\S]*?where not is_deleted and employee_id is not null/);
+  assert.match(migration, /superseded_by_manual_undertime/);
+  assert.match(migration, /array_agg\(e\.id order by e\.id\)[\s\S]*?cardinality\(matches\)=1/);
+  assert.match(migration, /if not new\.is_deleted and new\.employee_id is null then return null/);
+  assert.match(migration, /if exists\(select 1 from public\.manual_undertimes[\s\S]*?then return null/);
+  assert.match(migration, /create trigger manual_undertime_precedence before insert or update/);
+  assert.match(migration, /main_daily_attendance[\s\S]*?employee_id=e\.id and work_date=p_work_date[\s\S]*?status='complete'/);
+});
+
+test("migration 037 hardens source validation, duration, and concurrent precedence", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/037_undertime_identity_and_precedence.sql", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  assert.match(migration, /group by u\.id having count\(\*\)=1/);
+  assert.match(migration, /a\.status='complete' and a\.last_out is not null/);
+  assert.match(migration, /source_attendance_id=c\.ids\[1\]/);
+  assert.match(migration, /pg_advisory_xact_lock[\s\S]*?workspace[\s\S]*?employee_id[\s\S]*?work_date/);
+  assert.ok((migration.match(/perform public\.lock_undertime_identity/g) ?? []).length >= 3);
+  assert.match(migration, /canonical_minutes:=case[\s\S]*?extract\(hour from a\.last_out\)[\s\S]*?extract\(minute from a\.last_out\)/);
+  assert.match(migration, /canonical_hours:=to_char\(a\.last_out/);
+  assert.match(migration, /public\.late_records where id=p_source_late_record_id[\s\S]*?workspace=public\.attendance_workspace\(\)[\s\S]*?employee_id=e\.id[\s\S]*?work_date=p_work_date[\s\S]*?not is_deleted/);
+  assert.match(migration, /public\.uploaded_files f where f\.id=l\.source_file_id[\s\S]*?not f\.is_deleted/);
+  assert.match(migration, /unresolved_employee_identity/);
+  assert.match(service, /employee_id: record\.employeeId \?\? null/);
+  assert.match(context, /employeeMatches\.length === 1 \? employeeMatches\[0\]\.id : undefined/);
+});
+
+test("manual attendance mutations are database-first and failures remain visible", () => {
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.ok(context.indexOf("await saveAbsenceRecord") < context.indexOf("setAbsences((prev)"));
+  assert.match(context, /await saveManualUndertimeRecord\(newUndertime\);[\s\S]*?await applyDatabaseData\(false\)/);
+  assert.match(context, /await deleteManualUndertimeRecord\(id,[\s\S]*?await applyDatabaseData\(false\)/);
+  assert.match(context, /await softDeleteManualLateRecord\(id,[\s\S]*?await applyDatabaseData\(false\)/);
+  assert.match(service, /for \(const table of tables\)[\s\S]*?if \(error\) errors\.push[\s\S]*?failed: errors\.length/);
 });

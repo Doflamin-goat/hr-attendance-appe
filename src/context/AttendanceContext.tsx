@@ -9,10 +9,12 @@ import React, {
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { useAuth } from "./AuthContext";
+import { useEmployees } from "./EmployeesContext";
 import {
   clearWorkspaceAttendanceData,
   createDeleteBatchId,
   deleteAbsenceRecord,
+  deleteMainSystemGeneratedAbsence,
   deleteAbsencesByMonthFromDatabase,
   deleteExemptionRecord,
   deleteExemptionsByMonthFromDatabase,
@@ -22,17 +24,25 @@ import {
   describeSupabaseError,
   loadAttendanceData,
   loadDeletedAttendanceData,
-  removeManualHrRecordFromRecycleBin,
   restoreApprovedExemptionLate,
-  removeUploadedFileBatchFromRecycleBin,
+  permanentlyDeleteRecycleBinItem,
   restoreManualHrRecord,
   restoreUploadedFileBatch,
   saveAbsenceRecord,
+  updateMainSystemGeneratedAbsence,
   saveManualUndertimeRecord,
   saveMemoReads,
   saveUploadedAttendanceFile,
   type DeletedAttendanceData,
   type DeletedManualHrType,
+  loadMainDailyAttendance,
+  loadMainBiometricMappings,
+  saveMainAttendanceImport,
+  saveMainManualCheckout,
+  saveMainBiometricMapping,
+  deleteMainAttendanceUpload,
+  reconcileMainUnmatchedAttendance,
+  reconcileMainActiveUploadRecords,
 } from "../services/attendanceService";
 import {
   addManualLateRecord,
@@ -40,7 +50,8 @@ import {
   softDeleteManualLateRecord,
 } from "../services/manualLateService";
 import { computeManualLate } from "../utils/manualLate";
-import { classifyUploadedTimeIn, parseAttendanceDateTime } from "../utils/attendanceForms";
+import { classifyUploadedTimeIn, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../utils/attendanceForms";
+import { aggregateMainAttendance, isItcAttendanceRows, isMainAttendanceHeader, mainWorkDateOptions, type MainDailyAttendance } from "../utils/mainAttendance";
 import { toast } from "../components/ui";
 
 
@@ -48,6 +59,7 @@ export type LateRecordSourceType = "excel-upload" | "manual-entry";
 
 export interface LateRecord {
   id: string;
+  employeeId?: string;
   name: string;
   date: string;
   timeIn: string;
@@ -84,6 +96,7 @@ export interface LateSummary {
 
 export interface GeneratedUndertime {
   id: string;
+  employeeId?: string;
   name: string;
   date: string;
   timeIn: string;
@@ -104,6 +117,7 @@ export interface GeneratedHalfDay {
 
 export interface Exemption {
   id: string;
+  employeeId?: string;
   name: string;
   reason: string;
   date: string;
@@ -126,15 +140,19 @@ export interface AbsentRecord {
   date: string;
   reason: string;
   informed?: string[];
+  sourceType?: "manual" | "system_generated";
+  employeeId?: string;
 }
 
 export interface UndertimeRecord {
   id: string;
+  employeeId?: string;
   name: string;
   date: string;
   reason: string;
   undertimeHours: string;
   sourceLateRecordId?: string;
+  sourceAttendanceRecordId?: string;
   originalTimeIn?: string;
   sourceType?: "manual-entry" | "late-conversion";
   isManualOverride?: boolean;
@@ -190,31 +208,38 @@ interface AttendanceState {
   setSelectedDayScope: (scope: string) => void;
   refreshAttendanceData: () => Promise<void>;
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  mainDailyAttendance: MainDailyAttendance[];
+  saveManualCheckout: (recordId: string, checkoutTime: string, note?: string) => Promise<{ success: boolean; message: string }>;
+  mapMainEmployee: (recordId: string, employeeId: string) => Promise<{ success: boolean; message: string }>;
+  reconcileMainUnmatched: () => Promise<{ success: boolean; message: string }>;
+  cleanMainStaleRecords: () => Promise<{ success: boolean; message: string }>;
   addExemption: (ex: Omit<Exemption, "id">) => {
     success: boolean;
     message: string;
   };
-  addAbsence: (ab: Omit<AbsentRecord, "id">) => {
+  addAbsence: (ab: Omit<AbsentRecord, "id">) => Promise<{
     success: boolean;
     message: string;
-  };
-  addUndertime: (ut: Omit<UndertimeRecord, "id">) => {
+  }>;
+  addUndertime: (ut: Omit<UndertimeRecord, "id">) => Promise<{
     success: boolean;
     message: string;
-  };
+  }>;
   convertLateToUndertime: (payload: {
     lateRecordId: string;
     undertimeHours: string;
     reason?: string;
     isManualOverride?: boolean;
-  }) => {
+  }) => Promise<{
     success: boolean;
     message: string;
-  };
-  deleteUploadedFile: (fileId: string) => void;
-  deleteExemption: (id: string) => void;
-  deleteAbsence: (id: string) => void;
-  deleteManualUndertime: (id: string) => void;
+  }>;
+  deleteUploadedFile: (fileId: string) => Promise<{ success: boolean; message: string; warning?: string }>;
+  deleteExemption: (id: string) => Promise<{ success: boolean; message: string }>;
+  deleteAbsence: (id: string) => Promise<{ success: boolean; message: string }>;
+  updateMainSystemGeneratedAbsence: (id: string, reason: string, informed: string[]) => Promise<{ success: boolean; message: string }>;
+  deleteMainSystemGeneratedAbsence: (id: string) => Promise<{ success: boolean; message: string }>;
+  deleteManualUndertime: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Manual late records (migration 005)
   manualLateRecords: ManualLateRecord[];
@@ -226,13 +251,13 @@ interface AttendanceState {
     graceMinutes: number;
     reason: string;
   }) => Promise<{ success: boolean; message: string }>;
-  deleteManualLate: (id: string) => void;
-  clearAllAttendanceHistory: () => void;
-  deleteAbsencesByMonth: (monthKey: string) => void;
-  deleteExemptionsByMonth: (monthKey: string) => void;
-  deleteManualUndertimesByMonth: (monthKey: string) => void;
+  deleteManualLate: (id: string) => Promise<{ success: boolean; message: string }>;
+  clearAllAttendanceHistory: () => Promise<{ success: boolean; message: string }>;
+  deleteAbsencesByMonth: (monthKey: string) => Promise<{ success: boolean; message: string }>;
+  deleteExemptionsByMonth: (monthKey: string) => Promise<{ success: boolean; message: string }>;
+  deleteManualUndertimesByMonth: (monthKey: string) => Promise<{ success: boolean; message: string }>;
   restoreExemptionLate: (id: string) => Promise<void>;
-  removeManualUndertimeAdjustment: (id: string) => void;
+  removeManualUndertimeAdjustment: (id: string) => Promise<{ success: boolean; message: string }>;
   markAllMemoAlertsAsRead: () => void;
   exportFilteredWorkbook: () => Promise<{ success: boolean; message: string }>;
 
@@ -240,7 +265,7 @@ interface AttendanceState {
   deletedAttendanceData: DeletedAttendanceData;
   deletedAttendanceLoading: boolean;
   deletedAttendanceCount: number;
-  loadDeletedAttendanceData: () => Promise<void>;
+  loadDeletedAttendanceData: () => Promise<boolean>;
   restoreUploadedFileBatch: (fileId: string) => Promise<void>;
   removeUploadedFileFromRecycleBin: (fileId: string) => Promise<void>;
   restoreManualHrRecord: (type: DeletedManualHrType, id: string) => Promise<void>;
@@ -248,6 +273,7 @@ interface AttendanceState {
     type: DeletedManualHrType,
     id: string
   ) => Promise<void>;
+  deleteAllRecycleBinItems: () => Promise<{ succeeded: number; failed: number }>;
 }
 
 const EMPTY_DELETED_ATTENDANCE: DeletedAttendanceData = {
@@ -264,7 +290,7 @@ function normalizeName(name: string) {
 }
 
 function normalizeDate(dateValue: string) {
-  return new Date(dateValue).toLocaleDateString("en-US");
+  return normalizeAttendanceDate(dateValue);
 }
 
 function makeRecordKey(name: string, date: string, timeIn: string) {
@@ -348,24 +374,15 @@ function matchesCurrentScope(
   selectedMonthScope: string,
   selectedDayScope: string
 ) {
-  const normalized = normalizeDate(dateValue);
-
-  if (selectedDayScope !== "all") {
-    return normalized === selectedDayScope;
-  }
-
-  if (selectedMonthScope !== "all") {
-    return getMonthKey(dateValue) === selectedMonthScope;
-  }
-
-  return true;
+  return matchesDateScope(dateValue, selectedMonthScope, selectedDayScope);
 }
 
 const AttendanceContext = createContext<AttendanceState | undefined>(undefined);
 const STORAGE_KEY_PREFIX = "attendance-system-v6";
 
 export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
-  const { workspace, loading: authLoading } = useAuth();
+  const { workspace, hrScope, role, loading: authLoading } = useAuth();
+  const { activeEmployees } = useEmployees();
 
   const storageKey = useMemo(() => {
     if (!workspace) return null;
@@ -373,6 +390,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   }, [workspace]);
 
   const [fileName, setFileName] = useState("");
+  const [mainDailyAttendance, setMainDailyAttendance] = useState<MainDailyAttendance[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedAttendanceFile[]>([]);
   const [exemptionsState, setExemptions] = useState<Exemption[]>([]);
   const [absencesState, setAbsences] = useState<AbsentRecord[]>([]);
@@ -394,12 +412,13 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   const applyDatabaseData = async (loadFilterState = false) => {
     if (!workspace) return;
 
-    const [dbData, manualLates] = await Promise.all([
+    const [dbData, manualLates, mainDaily] = await Promise.all([
       loadAttendanceData(workspace),
       loadManualLateRecords(workspace).catch((error) => {
         console.error("Failed to load manual late records:", error);
         return [] as ManualLateRecord[];
       }),
+      hrScope === "MAIN" ? loadMainDailyAttendance().catch(() => [] as MainDailyAttendance[]) : Promise.resolve([] as MainDailyAttendance[]),
     ]);
 
     const localData = getStoredData(storageKey);
@@ -410,6 +429,8 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     setAbsences(dbData.absences);
     setManualUndertimes(dbData.manualUndertimes);
     setManualLateRecordsState(manualLates);
+    const attendanceNames = new Map(activeEmployees.map((employee) => [employee.id, employee.attendanceName ?? employee.fullName]));
+    setMainDailyAttendance(mainDaily.map((record) => ({ ...record, employeeName: record.employeeId ? (attendanceNames.get(record.employeeId) ?? record.employeeName) : record.employeeName })));
     setReadMemoEmployeeNames(dbData.readMemoEmployeeNames);
 
     if (loadFilterState) {
@@ -503,6 +524,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   }, [uploadedFiles]);
 
   const uploadedAvailableDates = useMemo(() => {
+    if (hrScope === "MAIN") {
+      return mainWorkDateOptions(mainDailyAttendance);
+    }
+
     const daySet = new Set<string>();
 
     uploadedFiles.forEach((file) => {
@@ -515,7 +540,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     return Array.from(daySet).sort(
       (a, b) => new Date(b).getTime() - new Date(a).getTime()
     );
-  }, [uploadedFiles]);
+  }, [hrScope, mainDailyAttendance, uploadedFiles]);
 
   const uploadedAvailableMonths = useMemo(() => {
     const monthSet = new Set<string>();
@@ -700,6 +725,38 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
           const data = event.target?.result;
           const workbook = XLSX.read(data, { type: "binary" });
 
+          const workbookRows = workbook.SheetNames.flatMap((sheetName) =>
+            XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1 })
+          );
+
+          if (hrScope === "MAIN") {
+            if (!workbookRows.some(isMainAttendanceHeader)) {
+              throw new Error("This file does not match the MAIN Office attendance format.");
+            }
+            const mappings = await loadMainBiometricMappings();
+            const summaries = aggregateMainAttendance(workbookRows, activeEmployees.map((employee) => ({
+              id: employee.id,
+              fullName: employee.fullName,
+              attendanceName: employee.attendanceName,
+              startDate: employee.startDate,
+              employmentStatus: employee.employmentStatus,
+              isDeleted: employee.isDeleted,
+            })), mappings);
+            if (summaries.length === 0) throw new Error("No valid MAIN Office C/In or C/Out records were found.");
+            await saveMainAttendanceImport(file.name, summaries, activeEmployees.map((employee) => ({ id: employee.id, startDate: employee.startDate })));
+            await applyDatabaseData(false);
+            setFileName(file.name);
+            const day = summaries[0]?.workDate;
+            if (day) { setSelectedMonthScope(getMonthKey(day)); setSelectedDayScope(day); }
+            toast.success("MAIN attendance imported", `${summaries.length} daily attendance record${summaries.length === 1 ? "" : "s"} processed.`);
+            if (e.target) e.target.value = "";
+            return;
+          }
+
+          if (!isItcAttendanceRows(workbookRows)) {
+            throw new Error("This file does not match the ITC Plant attendance format.");
+          }
+
           const newFileId = createId();
           const parsedLateRecords: LateRecord[] = [];
           const parsedGeneratedUndertime: GeneratedUndertime[] = [];
@@ -747,6 +804,11 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
               const timeIn = dateTime.toLocaleTimeString("en-US");
               const dateStr = dateTime.toLocaleDateString("en-US");
               const recordKey = makeRecordKey(name, dateStr, timeIn);
+              const employeeMatches = activeEmployees.filter((employee) =>
+                normalizeName(employee.fullName) === normalizeName(name) ||
+                normalizeName(employee.attendanceName ?? "") === normalizeName(name)
+              );
+              const matchedEmployeeId = employeeMatches.length === 1 ? employeeMatches[0].id : undefined;
 
               if (classification.kind === "half_day") {
                 parsedGeneratedHalfDays.push({
@@ -763,6 +825,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                   allExistingUndertimeKeys.add(recordKey);
                   parsedGeneratedUndertime.push({
                     id: createId(),
+                    employeeId: matchedEmployeeId,
                     name,
                     date: dateStr,
                     timeIn,
@@ -776,6 +839,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                   allExistingLateKeys.add(recordKey);
                   parsedLateRecords.push({
                     id: createId(),
+                    employeeId: matchedEmployeeId,
                     name,
                     date: dateStr,
                     timeIn,
@@ -845,12 +909,49 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
               hint: (error as { hint?: string }).hint,
             });
           }
-          toast.error("Upload failed", describeSupabaseError(error));
+          toast.error(
+            "Upload failed",
+            hrScope === "MAIN"
+              ? "MAIN Office attendance upload could not be completed. Please contact the system administrator."
+              : describeSupabaseError(error)
+          );
         }
       })();
     };
 
     reader.readAsBinaryString(file);
+  };
+
+  const saveManualCheckout = async (recordId: string, checkoutTime: string, note?: string) => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "Manual Check-Out is available to MAIN HR only." };
+    try {
+      await saveMainManualCheckout(recordId, checkoutTime, note);
+      await applyDatabaseData(false);
+      return { success: true, message: "Manual Check-Out saved and undertime recalculated." };
+    } catch (error) {
+      return { success: false, message: describeSupabaseError(error) };
+    }
+  };
+  const mapMainEmployee = async (recordId: string, employeeId: string) => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "MAIN HR access required." };
+    try { await saveMainBiometricMapping(recordId, employeeId); await applyDatabaseData(false); return { success: true, message: "Biometric mapping saved." }; }
+    catch (error) { return { success: false, message: describeSupabaseError(error) }; }
+  };
+  const reconcileMainUnmatched = async () => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "MAIN HR access required." };
+    try { const count = await reconcileMainUnmatchedAttendance(); await applyDatabaseData(false); return { success: true, message: `${count} known unmatched record${count === 1 ? "" : "s"} reconciled.` }; }
+    catch (error) { return { success: false, message: describeSupabaseError(error) }; }
+  };
+  const cleanMainStaleRecords = async () => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "MAIN HR access required." };
+    try {
+      await reconcileMainActiveUploadRecords();
+      await applyDatabaseData(false);
+      return { success: true, message: "Stale system-generated attendance records were reconciled." };
+    } catch (error) {
+      console.error("Failed to reconcile stale MAIN attendance records:", error);
+      return { success: false, message: "Stale system-generated attendance records could not be reconciled. Please try again." };
+    }
   };
 
   const addExemption = (_ex: Omit<Exemption, "id">) => {
@@ -861,47 +962,38 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     };
   };
 
-  const addAbsence = (ab: Omit<AbsentRecord, "id">) => {
+  const addAbsence = async (ab: Omit<AbsentRecord, "id">) => {
     const absenceDate = normalizeDate(ab.date);
     const normalizedName = normalizeName(ab.name);
 
-    if (!uploadedAvailableDates.includes(absenceDate)) {
+    if (hrScope !== "MAIN" && !uploadedAvailableDates.includes(absenceDate)) {
       return {
         success: false,
         message: "This date is not found in uploaded attendance files.",
       };
     }
 
-    if (absencesState.some((record) => normalizeName(record.name) === normalizedName && normalizeDate(record.date) === absenceDate)) {
+    if (absencesState.some((record) =>
+      normalizeName(record.name) === normalizedName &&
+      normalizeDate(record.date) === absenceDate
+    )) {
       return { success: false, message: "An absence already exists for this employee and date." };
     }
 
-    const newAbsence: AbsentRecord = {
-      ...ab,
-      id: createId(),
-    };
-
-    setAbsences((prev) => [newAbsence, ...prev]);
-    setSelectedMonthScope(getMonthKey(absenceDate));
-    setSelectedDayScope(absenceDate);
-
-    if (workspace) {
-      void saveAbsenceRecord(workspace, newAbsence).catch((error) => {
-        console.error("Failed to save absence to Supabase:", error);
-        toast.error(
-          "Database sync failed",
-          "Absence was added on screen but failed to save to database."
-        );
-      });
+    if (!workspace) return { success: false, message: "Not signed in to a workspace." };
+    try {
+      const saved = await saveAbsenceRecord(workspace, { ...ab, id: createId() });
+      setAbsences((prev) => [saved, ...prev]);
+      setSelectedMonthScope(getMonthKey(absenceDate));
+      setSelectedDayScope(absenceDate);
+      return { success: true, message: "Absence saved successfully." };
+    } catch (error) {
+      const message = describeSupabaseError(error);
+      return { success: false, message: message.includes("An absence record already exists") ? "An absence record already exists for this employee and date." : "The absence could not be saved. Please try again." };
     }
-
-    return {
-      success: true,
-      message: "Absence saved successfully.",
-    };
   };
 
-  const addUndertime = (ut: Omit<UndertimeRecord, "id">) => {
+  const addUndertime = async (ut: Omit<UndertimeRecord, "id">) => {
     const undertimeDate = normalizeDate(ut.date);
     const normalizedName = normalizeName(ut.name);
 
@@ -918,7 +1010,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
         record.date === undertimeDate
     );
 
-    if (matchingLateRecords.length === 0) {
+    if (hrScope !== "MAIN" && matchingLateRecords.length === 0) {
       return {
         success: false,
         message:
@@ -926,7 +1018,7 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       };
     }
 
-    if (!ut.sourceLateRecordId || !matchingLateRecords.some((record) => record.id === ut.sourceLateRecordId)) {
+    if (hrScope !== "MAIN" && (!ut.sourceLateRecordId || !matchingLateRecords.some((record) => record.id === ut.sourceLateRecordId))) {
       return { success: false, message: "Select the exact matching attendance record before saving undertime." };
     }
 
@@ -942,28 +1034,20 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       isManualOverride: ut.isManualOverride ?? true,
     };
 
-    setManualUndertimes((prev) => [newUndertime, ...prev]);
-    setSelectedMonthScope(getMonthKey(undertimeDate));
-    setSelectedDayScope(undertimeDate);
-
-    if (workspace) {
-      void saveManualUndertimeRecord(workspace, newUndertime).catch((error) => {
-        console.error("Failed to save manual undertime to Supabase:", error);
-        toast.error(
-          "Database sync failed",
-          "Undertime was added on screen but failed to save to database."
-        );
-      });
+    if (!workspace || !ut.employeeId) return { success: false, message: "Employee identity and workspace are required." };
+    try {
+      await saveManualUndertimeRecord(newUndertime);
+      await applyDatabaseData(false);
+      setSelectedMonthScope(getMonthKey(undertimeDate));
+      setSelectedDayScope(undertimeDate);
+      return { success: true, message: "Manual undertime saved successfully." };
+    } catch (error) {
+      console.error("Failed to save manual undertime:", error);
+      return { success: false, message: describeSupabaseError(error) };
     }
-
-    return {
-      success: true,
-      message:
-        "Manual undertime saved successfully and matching late record is now excluded.",
-    };
   };
 
-  const convertLateToUndertime = (payload: {
+  const convertLateToUndertime = async (payload: {
     lateRecordId: string;
     undertimeHours: string;
     reason?: string;
@@ -991,9 +1075,16 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       };
     }
 
+    const matchingEmployees = activeEmployees.filter((employee) =>
+      normalizeName(employee.fullName) === normalizeName(lateRecord.name) ||
+      normalizeName(employee.attendanceName ?? "") === normalizeName(lateRecord.name)
+    );
+    const employeeId = lateRecord.employeeId ?? (matchingEmployees.length === 1 ? matchingEmployees[0].id : undefined);
+
     const newUndertime: UndertimeRecord = {
       id: createId(),
       name: lateRecord.name,
+      employeeId,
       date: lateRecord.date,
       reason: payload.reason?.trim() || "Converted from late record",
       undertimeHours: payload.undertimeHours,
@@ -1003,18 +1094,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       isManualOverride: payload.isManualOverride ?? false,
     };
 
-    setManualUndertimes((prev) => [newUndertime, ...prev]);
-    setSelectedMonthScope(getMonthKey(lateRecord.date));
-    setSelectedDayScope("all");
-
-    if (workspace) {
-      void saveManualUndertimeRecord(workspace, newUndertime).catch((error) => {
-        console.error("Failed to save converted undertime to Supabase:", error);
-        toast.error(
-          "Database sync failed",
-          "Converted undertime was added on screen but failed to save to database."
-        );
-      });
+    if (!workspace || !employeeId) {
+      return { success: false, message: "Employee identity and workspace are required." };
+    }
+    try {
+      await saveManualUndertimeRecord(newUndertime);
+      await applyDatabaseData(false);
+      setSelectedMonthScope(getMonthKey(lateRecord.date));
+      setSelectedDayScope("all");
+    } catch (error) {
+      console.error("Failed to save converted undertime to Supabase:", error);
+      return { success: false, message: describeSupabaseError(error) };
     }
 
     return {
@@ -1023,85 +1113,86 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     };
   };
 
-  // Deleting an uploaded Excel/XLSX attendance file ONLY moves the
-  // uploaded_files row + its late_records + its generated_undertimes to
-  // Trash. Manual HR records — exemptions, absences, manual undertimes,
+  // Deleting an uploaded Excel/XLSX attendance file moves only upload-backed
+  // rows to Trash. Manual HR records — exemptions, absences, manual undertimes,
   // and late-to-undertime conversions — are independent saved records and
   // are NEVER touched by this action, regardless of whether their date
   // still has uploaded-file coverage. Manual records have their own
   // individual Delete buttons that soft-delete the chosen row.
-  const deleteUploadedFile = (fileId: string) => {
+  const deleteUploadedFile = async (fileId: string) => {
     const batchId = createDeleteBatchId();
-
-    setUploadedFiles((prevFiles) => {
-      const updatedFiles = prevFiles.filter((file) => file.id !== fileId);
-      setFileName(updatedFiles.length > 0 ? updatedFiles[0].fileName : "");
-      return updatedFiles;
-    });
-
-    if (workspace) {
-      void deleteUploadedAttendanceFile(fileId, {
+    if (!workspace) return { success: false, message: "No active attendance workspace." };
+    try {
+      await (hrScope === "MAIN" ? deleteMainAttendanceUpload(fileId, batchId) : deleteUploadedAttendanceFile(fileId, {
         batchId,
         reason: "uploaded_file_deleted",
-      }).catch((error) => {
-        console.error("Failed to delete uploaded file from Supabase:", error);
-        toast.error(
-          "Database sync failed",
-          "File was removed on screen but failed to move to Trash."
-        );
-      });
+      }));
+    } catch (error) {
+      console.error("Failed to delete uploaded file from Supabase:", error);
+      return { success: false, message: "Attendance upload could not be moved to Trash. Please refresh and try again." };
+    }
+
+    // The destructive operation has committed. Reflect that immediately and
+    // treat subsequent view refreshes as a separate, non-destructive phase.
+    setUploadedFiles((current) => current.filter((file) => file.id !== fileId));
+    const refreshResults = await Promise.allSettled([
+      applyDatabaseData(false),
+      refreshDeletedAttendanceData(false),
+    ]);
+    const refreshFailed = refreshResults.some((result) =>
+      result.status === "rejected" || (result.status === "fulfilled" && result.value === false)
+    );
+    return {
+      success: true,
+      message: "Attendance upload moved to Recycle Bin.",
+      warning: refreshFailed
+        ? "Attendance upload was moved to Recycle Bin, but some views could not be refreshed. Please refresh the page."
+        : undefined,
+    };
+  };
+
+  const deleteAbsence = async (id: string) => {
+    try { await deleteAbsenceRecord(id); await applyDatabaseData(false); return { success: true, message: "Absence moved to Trash." }; }
+    catch (error) { console.error("Failed to move absence to Trash:", error); return { success: false, message: "The absence could not be moved to Trash." }; }
+  };
+
+  const updateMainGeneratedAbsence = async (id: string, reason: string, informed: string[]) => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "MAIN HR access required." };
+    try {
+      await updateMainSystemGeneratedAbsence(id, reason, informed);
+      setAbsences((prev) => prev.map((record) => record.id === id ? { ...record, reason: reason.trim(), informed } : record));
+      return { success: true, message: "System-generated absence updated." };
+    } catch (error) {
+      console.error("Failed to update MAIN system-generated absence:", error);
+      return { success: false, message: "The system-generated absence could not be updated. Please try again." };
     }
   };
 
-  const deleteAbsence = (id: string) => {
-    setAbsences((prev) => prev.filter((record) => record.id !== id));
-
-    if (workspace) {
-      void deleteAbsenceRecord(id).catch((error) => {
-        console.error("Failed to move absence to Trash:", error);
-        toast.error(
-          "Database sync failed",
-          "Absence was removed on screen but failed to move to Trash."
-        );
-      });
+  const deleteMainGeneratedAbsence = async (id: string) => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "MAIN HR access required." };
+    try {
+      await deleteMainSystemGeneratedAbsence(id);
+      setAbsences((prev) => prev.filter((record) => record.id !== id));
+      return { success: true, message: "System-generated absence moved to Trash." };
+    } catch (error) {
+      console.error("Failed to delete MAIN system-generated absence:", error);
+      return { success: false, message: "The system-generated absence could not be moved to Trash. Please try again." };
     }
   };
 
   // Per-row Delete button on the Exemptions page. Soft-deletes only the
   // selected exemption row — the underlying late record reappears in
   // Late Records as a side effect of the adjustment count dropping.
-  const deleteExemption = (id: string) => {
-    setExemptions((prev) => prev.filter((record) => record.id !== id));
-
-    if (workspace) {
-      void deleteExemptionRecord(id, { reason: "exemption_deleted" }).catch(
-        (error) => {
-          console.error("Failed to move exemption to Trash:", error);
-          toast.error(
-            "Database sync failed",
-            "Exemption was removed on screen but failed to move to Trash."
-          );
-        }
-      );
-    }
+  const deleteExemption = async (id: string) => {
+    try { await deleteExemptionRecord(id, { reason: "exemption_deleted" }); await applyDatabaseData(false); return { success: true, message: "Exemption moved to Trash." }; }
+    catch (error) { console.error("Failed to move exemption to Trash:", error); return { success: false, message: "The exemption could not be moved to Trash." }; }
   };
 
   // Per-row Delete button on the Undertime > Manual Entry page.
   // Soft-deletes only the selected manual undertime row.
-  const deleteManualUndertime = (id: string) => {
-    setManualUndertimes((prev) => prev.filter((record) => record.id !== id));
-
-    if (workspace) {
-      void deleteManualUndertimeRecord(id, {
-        reason: "manual_undertime_deleted",
-      }).catch((error) => {
-        console.error("Failed to move manual undertime to Trash:", error);
-        toast.error(
-          "Database sync failed",
-          "Manual undertime was removed on screen but failed to move to Trash."
-        );
-      });
-    }
+  const deleteManualUndertime = async (id: string) => {
+    try { await deleteManualUndertimeRecord(id, { reason: "manual_undertime_deleted" }); await applyDatabaseData(false); return { success: true, message: "Manual undertime moved to Trash." }; }
+    catch (error) { console.error("Failed to move manual undertime to Trash:", error); return { success: false, message: "The manual undertime could not be moved to Trash." }; }
   };
 
   // ------------------- Manual late records (migration 005) --------------
@@ -1206,74 +1297,38 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const deleteManualLate = (id: string) => {
-    setManualLateRecordsState((prev) =>
-      prev.filter((record) => record.id !== id)
-    );
-
-    if (workspace) {
-      void softDeleteManualLateRecord(id, {
+  const deleteManualLate = async (id: string) => {
+    if (!workspace) return { success: false, message: "Not signed in to a workspace." };
+    try {
+      await softDeleteManualLateRecord(id, {
         batchId: createDeleteBatchId(),
         reason: "Deleted manual late record",
-      }).catch((error) => {
-        console.error("Failed to move manual late to Trash:", error);
-        toast.error(
-          "Database sync failed",
-          "Manual late was removed on screen but failed to move to Trash."
-        );
       });
-    }
+      await applyDatabaseData(false);
+      return { success: true, message: "Manual late moved to Trash." };
+    } catch (error) { console.error("Failed to move manual late to Trash:", error); return { success: false, message: "The manual late could not be moved to Trash." }; }
   };
 
-  const clearAllAttendanceHistory = () => {
-    setFileName("");
-    setUploadedFiles([]);
-    setExemptions([]);
-    setAbsences([]);
-    setManualUndertimes([]);
-    setReadMemoEmployeeNames([]);
-    setSelectedMonthScope("all");
-    setSelectedDayScope("all");
-
-    if (workspace) {
-      void clearWorkspaceAttendanceData(workspace).catch((error) => {
-        console.error("Failed to clear Supabase attendance data:", error);
-        toast.error(
-          "Database sync failed",
-          "Records were cleared on screen but failed to clear from database."
-        );
-      });
-    }
-
-    if (typeof window !== "undefined" && storageKey) {
-      window.localStorage.removeItem(storageKey);
-    }
+  const clearAllAttendanceHistory = async () => {
+    if (!workspace) return { success: false, message: "Not signed in to a workspace." };
+    const result = await clearWorkspaceAttendanceData(workspace);
+    await applyDatabaseData(false);
+    if (result.failed > 0) return { success: false, message: `${result.failed} data group(s) could not be cleared; remaining records were reloaded.` };
+    setSelectedMonthScope("all"); setSelectedDayScope("all");
+    if (typeof window !== "undefined" && storageKey) window.localStorage.removeItem(storageKey);
+    return { success: true, message: "Attendance history moved to Trash." };
   };
 
-  const deleteAbsencesByMonth = (monthKey: string) => {
-    setAbsences((prev) =>
-      prev.filter((record) => getMonthKey(record.date) !== monthKey)
-    );
-
-    if (workspace) {
-      void deleteAbsencesByMonthFromDatabase(workspace, monthKey).catch((error) => {
-        console.error("Failed to delete absences from Supabase:", error);
-      });
-    }
+  const deleteAbsencesByMonth = async (monthKey: string) => {
+    if (!workspace) return { success: false, message: "Not signed in to a workspace." };
+    try { await deleteAbsencesByMonthFromDatabase(workspace, monthKey); await applyDatabaseData(false); return { success: true, message: "Absences moved to Trash." }; }
+    catch (error) { console.error("Failed to delete absences:", error); return { success: false, message: "Absences could not be moved to Trash." }; }
   };
 
-  const deleteExemptionsByMonth = (monthKey: string) => {
-    setExemptions((prev) =>
-      prev.filter((record) => getMonthKey(record.date) !== monthKey)
-    );
-
-    if (workspace) {
-      void deleteExemptionsByMonthFromDatabase(workspace, monthKey).catch(
-        (error) => {
-          console.error("Failed to delete exemptions from Supabase:", error);
-        }
-      );
-    }
+  const deleteExemptionsByMonth = async (monthKey: string) => {
+    if (!workspace) return { success: false, message: "Not signed in to a workspace." };
+    try { await deleteExemptionsByMonthFromDatabase(workspace, monthKey); await applyDatabaseData(false); return { success: true, message: "Exemptions moved to Trash." }; }
+    catch (error) { console.error("Failed to delete exemptions:", error); return { success: false, message: "Exemptions could not be moved to Trash." }; }
   };
 
   const restoreExemptionLate = async (id: string) => {
@@ -1281,48 +1336,45 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     await applyDatabaseData(false);
   };
 
-  const deleteManualUndertimesByMonth = (monthKey: string) => {
-    setManualUndertimes((prev) =>
-      prev.filter((record) => getMonthKey(record.date) !== monthKey)
-    );
-
-    if (workspace) {
-      void deleteManualUndertimesByMonthFromDatabase(workspace, monthKey).catch(
-        (error) => {
-          console.error("Failed to delete manual undertimes from Supabase:", error);
-        }
-      );
-    }
+  const deleteManualUndertimesByMonth = async (monthKey: string) => {
+    if (!workspace) return { success: false, message: "Not signed in to a workspace." };
+    try { await deleteManualUndertimesByMonthFromDatabase(workspace, monthKey); await applyDatabaseData(false); return { success: true, message: "Manual undertimes moved to Trash." }; }
+    catch (error) { console.error("Failed to delete manual undertimes:", error); return { success: false, message: "Manual undertimes could not be moved to Trash." }; }
   };
 
   // Removes the manual undertime adjustment so the underlying late
   // record reappears in Late Records. The undertime row itself is moved
   // to Trash (soft delete), where it can be restored from Recycle Bin.
-  const removeManualUndertimeAdjustment = (id: string) => {
-    setManualUndertimes((prev) => prev.filter((record) => record.id !== id));
-
-    void deleteManualUndertimeRecord(id, {
-      reason: "manual_undertime_removed_for_late",
-    }).catch((error) => {
+  const removeManualUndertimeAdjustment = async (id: string) => {
+    try {
+      await deleteManualUndertimeRecord(id, {
+        reason: "manual_undertime_removed_for_late",
+      });
+      await applyDatabaseData(false);
+      return { success: true, message: "Manual undertime moved to Trash." };
+    } catch (error) {
       console.error("Failed to move manual undertime to Trash:", error);
-    });
+      return { success: false, message: describeSupabaseError(error) };
+    }
   };
 
   // ------------------- Recycle Bin / Trash ------------------------------
 
-  const refreshDeletedAttendanceData = async () => {
+  const refreshDeletedAttendanceData = async (showError = true): Promise<boolean> => {
     if (!workspace) {
       setDeletedAttendanceData(EMPTY_DELETED_ATTENDANCE);
-      return;
+      return true;
     }
 
     setDeletedAttendanceLoading(true);
     try {
       const data = await loadDeletedAttendanceData(workspace);
       setDeletedAttendanceData(data);
+      return true;
     } catch (error) {
       console.error("Failed to load Recycle Bin:", error);
-      toast.error("Could not load Recycle Bin", describeSupabaseError(error));
+      if (showError) toast.error("Could not load Recycle Bin", describeSupabaseError(error));
+      return false;
     } finally {
       setDeletedAttendanceLoading(false);
     }
@@ -1345,11 +1397,11 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
 
   const removeUploadedFileFromRecycleBinAction = async (fileId: string) => {
     try {
-      await removeUploadedFileBatchFromRecycleBin(fileId);
+      await permanentlyDeleteRecycleBinItem("uploaded_file", fileId);
       await refreshDeletedAttendanceData();
       toast.success(
-        "Removed from Recycle Bin",
-        "Hidden from the Recycle Bin. The records are retained in the database for emergency retrieval."
+        "Permanently deleted",
+        "The uploaded attendance batch was permanently deleted."
       );
     } catch (error) {
       console.error("Failed to remove batch from Recycle Bin:", error);
@@ -1388,11 +1440,11 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     id: string
   ) => {
     try {
-      await removeManualHrRecordFromRecycleBin(type, id);
+      await permanentlyDeleteRecycleBinItem(type, id);
       await refreshDeletedAttendanceData();
       toast.success(
-        "Removed from Recycle Bin",
-        "Hidden from the Recycle Bin. The record is retained in the database for emergency retrieval."
+        "Permanently deleted",
+        "The HR record was permanently deleted."
       );
     } catch (error) {
       console.error(
@@ -1401,6 +1453,43 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       );
       toast.error("Remove failed", describeSupabaseError(error));
     }
+  };
+
+  const deleteAllRecycleBinItems = async () => {
+    if (!workspace || deletedAttendanceCount === 0) return { succeeded: 0, failed: 0 };
+    const succeededFiles = new Set<string>();
+    const succeededManual = new Set<string>();
+    let failed = 0;
+
+    for (const file of deletedAttendanceData.uploadedFiles) {
+      try {
+        await permanentlyDeleteRecycleBinItem("uploaded_file", file.id);
+        succeededFiles.add(file.id);
+      } catch (error) {
+        failed += 1;
+        console.error("Failed to permanently remove uploaded batch:", error);
+      }
+    }
+    for (const record of deletedAttendanceData.manualHrRecords) {
+      try {
+        await permanentlyDeleteRecycleBinItem(record.type, record.id);
+        succeededManual.add(`${record.type}:${record.id}`);
+      } catch (error) {
+        failed += 1;
+        console.error("Failed to permanently remove manual HR record:", error);
+      }
+    }
+
+    const succeeded = succeededFiles.size + succeededManual.size;
+    setDeletedAttendanceData((current) => ({
+      uploadedFiles: current.uploadedFiles.filter((file) => !succeededFiles.has(file.id)),
+      manualHrRecords: current.manualHrRecords.filter((record) => !succeededManual.has(`${record.type}:${record.id}`)),
+    }));
+    await refreshDeletedAttendanceData(false);
+
+    if (failed === 0) toast.success("Recycle Bin cleared", `${succeeded} item${succeeded === 1 ? "" : "s"} permanently deleted.`);
+    else toast.warning("Recycle Bin partially cleared", `${succeeded} item${succeeded === 1 ? "" : "s"} permanently deleted. ${failed} item${failed === 1 ? "" : "s"} could not be deleted.`);
+    return { succeeded, failed };
   };
 
   const markAllMemoAlertsAsRead = () => {
@@ -1420,25 +1509,6 @@ const exportFilteredWorkbook = async () => {
   try {
     const workbook = new ExcelJS.Workbook();
 
-    const WAIS_EMPLOYEES = [
-      "Agravio, John Maric",
-      "Aquino, Armando",
-      "Cantillon, Ma. Louissa",
-      "Codilan, Ian Christopher",
-      "Cruz, Gino",
-      "Cruz, Nathaniel Philip",
-      "Engay, Lovely Jane",
-      "Loterte, Jenny Lyn",
-      "Pascua, Joseph",
-      "Pascual, Lucky Joy",
-      "Pesquerra, Louis Gabriel",
-      "Ramirez, Rejohn",
-      "Raquem, Karl Anthony",
-      "Tapat, Leilani",
-      "Yatsu, Nanako",
-      "Corona Jr., Eduard",
-    ];
-
 const cleanName = (name: string) =>
   name
     .trim()
@@ -1451,14 +1521,12 @@ const cleanName = (name: string) =>
     .replace(" ma. ", " ma ")
     .replace(" ma,", " ma,");
 
-    const waisSet = new Set(WAIS_EMPLOYEES.map(cleanName));
+    const employerByName = new Map(activeEmployees.map((employee) => [cleanName(employee.fullName), employee.employer]));
 
 const getTeam = (name: string) => {
   const normalized = cleanName(name);
 
-  if (waisSet.has(normalized)) return "WAIS";
-
-  return "APP";
+  return employerByName.get(normalized) ?? "UNASSIGNED";
 };
 
     const sortByName = <T extends { name: string }>(items: T[]) =>
@@ -1466,6 +1534,9 @@ const getTeam = (name: string) => {
 
     const byTeam = <T extends { name: string }>(items: T[], team: string) =>
       sortByName(items.filter((item) => getTeam(item.name) === team));
+
+    const primaryEmployer = workspace === "WAIS" ? "WATTS APP" : "APP";
+    const secondaryEmployer = workspace === "WAIS" ? "M2B" : "WAIS";
 
     const reportScope =
       selectedDayScope !== "all"
@@ -1833,15 +1904,15 @@ const getTeam = (name: string) => {
       ["Employee", "Total Lates", "Total Minutes Late", "Memo Status"],
       [
         {
-          label: "WAIS (ADMIN)",
+          label: secondaryEmployer,
           team: "WAIS",
-          rows: summaryRows(byTeam(lateSummary, "WAIS")),
+          rows: summaryRows(byTeam(lateSummary, secondaryEmployer)),
           memoColumnIndex: 3,
         },
         {
-          label: "APP (PRODUCTION)",
+          label: primaryEmployer,
           team: "APP",
-          rows: summaryRows(byTeam(lateSummary, "APP")),
+          rows: summaryRows(byTeam(lateSummary, primaryEmployer)),
           memoColumnIndex: 3,
         },
       ]
@@ -1856,14 +1927,14 @@ const getTeam = (name: string) => {
       ["Employee", "Date", "Time In", "Minutes Late", "Seconds Late", "Source File"],
       [
         {
-          label: "WAIS (ADMIN)",
+          label: secondaryEmployer,
           team: "WAIS",
-          rows: lateRows(byTeam(lateRecords, "WAIS")),
+          rows: lateRows(byTeam(lateRecords, secondaryEmployer)),
         },
         {
-          label: "APP (PRODUCTION)",
+          label: primaryEmployer,
           team: "APP",
-          rows: lateRows(byTeam(lateRecords, "APP")),
+          rows: lateRows(byTeam(lateRecords, primaryEmployer)),
         },
         {
           label: "UNASSIGNED",
@@ -1882,14 +1953,14 @@ const getTeam = (name: string) => {
       ["Employee", "Date", "Reason"],
       [
         {
-          label: "WAIS (ADMIN)",
+          label: secondaryEmployer,
           team: "WAIS",
-          rows: exemptionRows(byTeam(exemptions, "WAIS")),
+          rows: exemptionRows(byTeam(exemptions, secondaryEmployer)),
         },
         {
-          label: "APP (PRODUCTION)",
+          label: primaryEmployer,
           team: "APP",
-          rows: exemptionRows(byTeam(exemptions, "APP")),
+          rows: exemptionRows(byTeam(exemptions, primaryEmployer)),
         },
         {
           label: "UNASSIGNED",
@@ -1918,14 +1989,14 @@ const getTeam = (name: string) => {
       ["Employee", "Date", "Reason", "Source"],
       [
         {
-          label: "WAIS (ADMIN)",
+          label: secondaryEmployer,
           team: "WAIS",
-          rows: absenceRows(byTeam(absences, "WAIS")),
+          rows: absenceRows(byTeam(absences, secondaryEmployer)),
         },
         {
-          label: "APP (PRODUCTION)",
+          label: primaryEmployer,
           team: "APP",
-          rows: absenceRows(byTeam(absences, "APP")),
+          rows: absenceRows(byTeam(absences, primaryEmployer)),
         },
         {
           label: "UNASSIGNED",
@@ -1944,14 +2015,14 @@ const getTeam = (name: string) => {
       ["Employee", "Date", "Time In", "Source File"],
       [
         {
-          label: "WAIS (ADMIN)",
+          label: secondaryEmployer,
           team: "WAIS",
-          rows: systemUndertimeRows(byTeam(generatedUndertimes, "WAIS")),
+          rows: systemUndertimeRows(byTeam(generatedUndertimes, secondaryEmployer)),
         },
         {
-          label: "APP (PRODUCTION)",
+          label: primaryEmployer,
           team: "APP",
-          rows: systemUndertimeRows(byTeam(generatedUndertimes, "APP")),
+          rows: systemUndertimeRows(byTeam(generatedUndertimes, primaryEmployer)),
         },
         {
           label: "UNASSIGNED",
@@ -1970,14 +2041,14 @@ const getTeam = (name: string) => {
       ["Employee", "Date", "Reason", "Hours"],
       [
         {
-          label: "WAIS (ADMIN)",
+          label: secondaryEmployer,
           team: "WAIS",
-          rows: manualUndertimeRows(byTeam(manualUndertimes, "WAIS")),
+          rows: manualUndertimeRows(byTeam(manualUndertimes, secondaryEmployer)),
         },
         {
-          label: "APP (PRODUCTION)",
+          label: primaryEmployer,
           team: "APP",
-          rows: manualUndertimeRows(byTeam(manualUndertimes, "APP")),
+          rows: manualUndertimeRows(byTeam(manualUndertimes, primaryEmployer)),
         },
         {
           label: "UNASSIGNED",
@@ -2057,6 +2128,11 @@ const getTeam = (name: string) => {
         setSelectedDayScope,
         refreshAttendanceData: () => applyDatabaseData(false),
         handleFileUpload,
+        mainDailyAttendance,
+        saveManualCheckout,
+        mapMainEmployee,
+        reconcileMainUnmatched,
+        cleanMainStaleRecords,
         addExemption,
         addAbsence,
         addUndertime,
@@ -2064,6 +2140,8 @@ const getTeam = (name: string) => {
         deleteUploadedFile,
         deleteExemption,
         deleteAbsence,
+        updateMainSystemGeneratedAbsence: updateMainGeneratedAbsence,
+        deleteMainSystemGeneratedAbsence: deleteMainGeneratedAbsence,
         deleteManualUndertime,
 
         manualLateRecords: manualLateRecordsState,
@@ -2088,6 +2166,7 @@ const getTeam = (name: string) => {
         restoreManualHrRecord: restoreManualHrRecordAction,
         removeManualHrRecordFromRecycleBin:
           removeManualHrRecordFromRecycleBinAction,
+        deleteAllRecycleBinItems,
       }}
     >
       {children}

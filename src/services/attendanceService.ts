@@ -9,6 +9,11 @@ import type {
   UndertimeRecord,
   UploadedAttendanceFile,
 } from "../context/AttendanceContext";
+import {
+  activeMainAttendanceRecordIds,
+  type MainDailyAttendance,
+  type MainAttendanceSourceLink,
+} from "../utils/mainAttendance";
 
 type Workspace = "APP" | "WAIS";
 
@@ -81,9 +86,10 @@ export function createDeleteBatchId(): string {
     return crypto.randomUUID();
   }
   // RFC4122-ish fallback, fine for batch grouping
-  return `b-${Date.now().toString(16)}-${Math.random()
-    .toString(16)
-    .slice(2, 10)}-${Math.random().toString(16).slice(2, 10)}`;
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16);
+    return (token === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
 }
 
 /**
@@ -292,6 +298,7 @@ export async function loadAttendanceData(workspace: Workspace) {
 
     const mappedRecord: LateRecord = {
       id: rowId(record.id),
+      employeeId: record.employee_id == null ? undefined : String(record.employee_id),
       name: record.employee_name,
       date: toDisplayDate(record.work_date),
       timeIn: record.time_in ?? "",
@@ -320,6 +327,7 @@ export async function loadAttendanceData(workspace: Workspace) {
 
     const mappedRecord: GeneratedUndertime = {
       id: rowId(record.id),
+      employeeId: record.employee_id == null ? undefined : String(record.employee_id),
       name: record.employee_name,
       date: toDisplayDate(record.work_date),
       timeIn: record.time_in ?? "",
@@ -350,6 +358,7 @@ export async function loadAttendanceData(workspace: Workspace) {
     const linkedLate = (lateRecordsResult.data ?? []).find((late) => rowId(late.id) === rowId(item.late_record_id));
     return ({
     id: rowId(item.id),
+    employeeId: item.employee_id == null ? undefined : String(item.employee_id),
     name: item.employee_name,
     date: toDisplayDate(item.work_date),
     reason: item.reason,
@@ -372,17 +381,21 @@ export async function loadAttendanceData(workspace: Workspace) {
     date: toDisplayDate(item.work_date),
     reason: item.reason,
     informed: normalizeTextList(item.informed_to),
+    sourceType: item.source_type === "system_generated" ? "system_generated" : "manual",
+    employeeId: item.employee_id == null ? undefined : String(item.employee_id),
   }));
 
   const manualUndertimes: UndertimeRecord[] = (
     manualUndertimesResult.data ?? []
   ).map((item) => ({
     id: rowId(item.id),
+    employeeId: item.employee_id == null ? undefined : String(item.employee_id),
     name: item.employee_name,
     date: toDisplayDate(item.work_date),
     reason: item.reason,
     undertimeHours: item.undertime_hours,
     sourceLateRecordId: item.source_late_record_id ?? undefined,
+    sourceAttendanceRecordId: item.source_attendance_id ?? undefined,
     originalTimeIn: item.original_time_in ?? undefined,
     sourceType: item.source_type ?? undefined,
     isManualOverride: item.is_manual_override ?? false,
@@ -495,6 +508,7 @@ export async function saveUploadedAttendanceFile(
 
   const lateRows = lateRecords.map((record) => ({
     workspace,
+    employee_id: record.employeeId ?? null,
     employee_name: record.name,
     work_date: toDbDate(record.date),
     time_in: record.timeIn,
@@ -507,6 +521,7 @@ export async function saveUploadedAttendanceFile(
 
   const undertimeRows = generatedUndertimes.map((record) => ({
     workspace,
+    employee_id: record.employeeId ?? null,
     employee_name: record.name,
     work_date: toDbDate(record.date),
     time_in: record.timeIn,
@@ -593,14 +608,14 @@ export async function saveExemptionRecord(workspace: Workspace, exemption: Exemp
   throw new Error("Direct exemption inserts are not allowed. Use submitLinkedExemption.");
 }
 
-export async function loadCrossWorkspaceExemptionWorkflowData(): Promise<{
+export async function loadCrossWorkspaceExemptionWorkflowData(workspace: Workspace): Promise<{
   lateRecords: LateRecord[];
   exemptions: Exemption[];
 }> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const [lateResult, exemptionResult] = await Promise.all([
-    supabase.from("late_records").select("id, workspace, employee_name, work_date, time_in, minutes_late, seconds_late, total_seconds_late, source_file_id, source_file_name, is_deleted").eq("is_deleted", false),
-    supabase.from("exemptions").select("id, workspace, employee_name, work_date, reason, minutes_late, reported_time, informed_parties, approval_status, late_record_id, reviewed_by, reviewed_at, review_remarks, late_restored_at, late_restored_by, is_deleted").eq("is_deleted", false),
+    supabase.from("late_records").select("id, workspace, employee_name, work_date, time_in, minutes_late, seconds_late, total_seconds_late, source_file_id, source_file_name, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
+    supabase.from("exemptions").select("id, workspace, employee_name, work_date, reason, minutes_late, reported_time, informed_parties, approval_status, late_record_id, reviewed_by, reviewed_at, review_remarks, late_restored_at, late_restored_by, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
   ]);
   if (lateResult.error) throw lateResult.error;
   if (exemptionResult.error) throw exemptionResult.error;
@@ -634,7 +649,17 @@ export async function submitLinkedExemption(input: { employeeId: string; lateRec
 export async function reviewStagedExemption(id: StagedExemptionId, status: "approved" | "declined", remarks = "") {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { error } = await supabase.rpc("review_exemption", { p_id: id, p_status: status, p_remarks: remarks || null });
-  if (error) throw error;
+  if (error) {
+    console.error("MAIN/ITC exemption review RPC failed:", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      id,
+      status,
+    });
+    throw error;
+  }
 }
 
 export function describeReviewExemptionError(error: unknown): string {
@@ -692,11 +717,12 @@ export async function restoreApprovedExemptionLate(id: string) {
   if (error) throw error;
 }
 
-export async function loadStagedHalfDays(): Promise<StagedHalfDayRecord[]> {
+export async function loadStagedHalfDays(workspace: Workspace): Promise<StagedHalfDayRecord[]> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase
     .from("half_day_records")
     .select("id, employee_id, employee_name, work_date, absent_period, scheduled_start, scheduled_end, reason, source_type, source_file_name, source_time_in, source_generated_undertime_id")
+    .eq("workspace", workspace)
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
   if (error) throw error;
@@ -725,37 +751,150 @@ export async function deleteStagedHalfDay(id: string) {
 export async function saveAbsenceRecord(workspace: Workspace, absence: AbsentRecord) {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  const { error } = await supabase.from("absences").insert({
+  const { data, error } = await supabase.from("absences").insert({
     workspace,
+    employee_id: absence.employeeId ?? null,
     employee_name: absence.name,
     work_date: toDbDate(absence.date),
     reason: absence.reason,
     informed_to: absence.informed ?? [],
-  });
+    source_type: "manual",
+  }).select("id").single();
 
+  if (error) throw error;
+  return { ...absence, id: rowId(data.id) };
+}
+
+export async function loadCrossWorkspaceAbsences(workspace: Workspace): Promise<AbsentRecord[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.from("absences").select("id, employee_id, employee_name, work_date, reason, informed_to, source_type").eq("workspace", workspace).eq("is_deleted", false).order("work_date", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((item) => ({ id: rowId(item.id), employeeId: item.employee_id == null ? undefined : String(item.employee_id), name: item.employee_name, date: toDisplayDate(item.work_date), reason: item.reason, informed: normalizeTextList(item.informed_to), sourceType: item.source_type === "system_generated" ? "system_generated" : "manual" }));
+}
+
+export async function loadMainDailyAttendance(): Promise<MainDailyAttendance[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const [dailyResult, filesResult, sourcesResult] = await Promise.all([
+    supabase.from("main_daily_attendance").select("*").eq("workspace", "WAIS").eq("is_deleted", false).order("work_date", { ascending: false }),
+    supabase.from("uploaded_files").select("id, file_name").eq("workspace", "WAIS").eq("is_deleted", false),
+    supabase.from("main_attendance_sources").select("daily_attendance_id, source_file_id"),
+  ]);
+  if (dailyResult.error) throw dailyResult.error;
+  if (filesResult.error) throw filesResult.error;
+  if (sourcesResult.error) throw sourcesResult.error;
+
+  const records = (dailyResult.data ?? []).map((row) => ({
+    employeeId: row.employee_id,
+    employeeName: row.employee_name,
+    rawName: row.raw_name,
+    deviceNo: row.device_no,
+    workDate: row.work_date,
+    firstIn: row.first_in,
+    lastOut: row.last_out,
+    biometricLastOut: row.biometric_last_out ?? null,
+    checkoutSource: row.checkout_source,
+    manualCheckoutNote: row.manual_checkout_note ?? null,
+    status: row.status,
+    lateMinutes: row.late_minutes ?? 0,
+    lateSeconds: row.late_seconds ?? 0,
+    halfDay: row.is_half_day === true,
+    undertimeMinutes: row.undertime_minutes ?? 0,
+    id: String(row.id),
+    sourceFileId: row.source_file_id == null ? null : String(row.source_file_id),
+    sourceFileName: row.source_file_name ?? null,
+  } as MainDailyAttendance & { id: string }));
+  const activeSourceFileIds = new Set((filesResult.data ?? []).map((row) => String(row.id)));
+  const activeSourceFileNames = new Set(
+    (filesResult.data ?? [])
+      .map((row) => String((row as { file_name?: string | null }).file_name ?? ""))
+      .filter(Boolean),
+  );
+  const sourceLinks: MainAttendanceSourceLink[] = (sourcesResult.data ?? []).map((row) => ({
+    dailyAttendanceId: String(row.daily_attendance_id),
+    sourceFileId: String(row.source_file_id),
+  }));
+  const activeRecordIds = activeMainAttendanceRecordIds(
+    records,
+    activeSourceFileIds,
+    sourceLinks,
+    activeSourceFileNames,
+  );
+  return records.filter((record) => activeRecordIds.has(record.id));
+}
+
+export async function loadMainBiometricMappings(): Promise<Record<string, string>> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const [devices, aliases] = await Promise.all([
+    supabase.from("main_biometric_mappings").select("device_no, employee_id"),
+    supabase.from("main_biometric_aliases").select("normalized_alias, employee_id"),
+  ]);
+  if (devices.error) throw devices.error;
+  if (aliases.error) throw aliases.error;
+  return Object.fromEntries([
+    ...(devices.data ?? []).map((row) => [String(row.device_no), String(row.employee_id)]),
+    ...(aliases.data ?? []).map((row) => [`name:${String(row.normalized_alias)}`, String(row.employee_id)]),
+  ]);
+}
+
+export async function saveMainBiometricMapping(recordId: string, employeeId: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("map_main_attendance_record", { p_record_id: recordId, p_employee_id: employeeId });
+  if (error) throw error;
+}
+
+export async function reconcileMainUnmatchedAttendance() {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("reconcile_main_unmatched_attendance");
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+export async function reconcileMainActiveUploadRecords() {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("reconcile_main_active_upload_records");
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+export async function deleteMainAttendanceUpload(fileId: string, batchId: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("delete_main_attendance_upload", { p_file_id: fileId, p_batch_id: batchId });
+  if (error) throw error;
+}
+
+export async function saveMainAttendanceImport(fileName: string, records: MainDailyAttendance[], roster: Array<{ id: string; startDate?: string | null }>) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("import_main_attendance", { p_file_name: fileName, p_records: records, p_roster: roster });
+  if (error) throw error;
+}
+
+export async function saveMainManualCheckout(recordId: string, checkoutTime: string, note?: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("set_main_manual_checkout", { p_record_id: recordId, p_checkout_time: checkoutTime, p_note: note?.trim() || null });
   if (error) throw error;
 }
 
 export async function saveManualUndertimeRecord(
-  workspace: Workspace,
   undertime: UndertimeRecord
 ) {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  const { error } = await supabase.from("manual_undertimes").insert({
-    workspace,
-    employee_name: undertime.name,
-    work_date: toDbDate(undertime.date),
-    reason: undertime.reason,
-    undertime_hours: undertime.undertimeHours,
-    source_late_record_id: undertime.sourceLateRecordId ?? null,
-    original_time_in: undertime.originalTimeIn ?? null,
-    source_type: undertime.sourceType ?? null,
-    is_manual_override: undertime.isManualOverride ?? false,
-    informed_to: undertime.informed ?? [],
+  if (!undertime.employeeId) throw new Error("Employee identity is required.");
+  const { data, error } = await supabase.rpc("create_manual_undertime", {
+    p_employee_id: undertime.employeeId,
+    p_work_date: toDbDate(undertime.date),
+    p_reason: undertime.reason,
+    p_undertime_hours: undertime.undertimeHours,
+    p_informed: undertime.informed ?? [],
+    p_source_attendance_id: undertime.sourceAttendanceRecordId ?? null,
+    p_source_late_record_id: undertime.sourceLateRecordId ? Number(undertime.sourceLateRecordId) : null,
+    p_original_time_in: undertime.originalTimeIn ?? null,
+    p_source_type: undertime.sourceType ?? "manual-entry",
+    p_is_manual_override: undertime.isManualOverride ?? true,
   });
 
   if (error) throw error;
+  return { ...undertime, id: rowId(data) };
 }
 
 export async function deleteExemptionRecord(
@@ -816,6 +955,45 @@ export async function deleteAbsenceRecord(
     .from("absences")
     .update(patch)
     .eq("id", id)
+    .eq("is_deleted", false);
+
+  if (error) throw error;
+}
+
+export async function updateMainSystemGeneratedAbsence(
+  id: string,
+  reason: string,
+  informed: string[],
+) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const cleanedReason = reason.trim();
+  if (!cleanedReason) throw new Error("Absence reason is required.");
+
+  const { error } = await supabase
+    .from("absences")
+    .update({ reason: cleanedReason, informed_to: informed })
+    .eq("id", id)
+    .eq("workspace", "WAIS")
+    .eq("source_type", "system_generated")
+    .eq("is_deleted", false);
+
+  if (error) throw error;
+}
+
+export async function deleteMainSystemGeneratedAbsence(id: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const deletedBy = await getCurrentUserId();
+  const patch = buildSoftDeletePatch(
+    { reason: "MAIN system-generated absence corrected" },
+    deletedBy,
+  );
+
+  const { error } = await supabase
+    .from("absences")
+    .update(patch)
+    .eq("id", id)
+    .eq("workspace", "WAIS")
+    .eq("source_type", "system_generated")
     .eq("is_deleted", false);
 
   if (error) throw error;
@@ -975,6 +1153,8 @@ export async function clearWorkspaceAttendanceData(workspace: Workspace) {
     "uploaded_files",
   ];
 
+  const errors: string[] = [];
+  let succeeded = 0;
   for (const table of tables) {
     const { error } = await supabase
       .from(table)
@@ -982,10 +1162,11 @@ export async function clearWorkspaceAttendanceData(workspace: Workspace) {
       .eq("workspace", workspace)
       .eq("is_deleted", false);
 
-    if (error) throw error;
+    if (error) errors.push(`${table}: ${error.message}`);
+    else succeeded += 1;
   }
 
-  return batchId;
+  return { batchId, succeeded, failed: errors.length, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1301,7 @@ export async function loadDeletedAttendanceData(
     supabase
       .from("half_day_records")
       .select("*")
+      .eq("workspace", workspace)
       .eq("is_deleted", true)
       .eq("removed_from_recycle_bin", false)
       .order("deleted_at", { ascending: false }),
@@ -1421,4 +1603,17 @@ export async function removeUploadedFileBatchFromRecycleBin(fileId: string) {
   } else {
     await applyPatchByFileFallback(patch, fileId);
   }
+}
+
+export async function permanentlyDeleteRecycleBinItem(
+  kind: "uploaded_file" | DeletedManualHrType,
+  id: string,
+) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("permanently_delete_recycle_bin_item", {
+    p_kind: kind,
+    p_id: id,
+  });
+  if (error) throw error;
+  if (data !== true) throw new Error("The Recycle Bin item was not found in the current workspace.");
 }

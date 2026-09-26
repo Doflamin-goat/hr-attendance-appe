@@ -16,32 +16,46 @@ import {
   ChevronRight,
   Trash2,
   ClipboardCheck,
+  Palmtree,
   CheckCircle2,
   XCircle,
+  ListChecks,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
 import { useAttendance } from "../../context/AttendanceContext";
 import { useAuth } from "../../context/AuthContext";
 import { ThemeToggle } from "../ui";
 import { loadAttendanceNotifications, type AttendanceNotification } from "../../services/notificationService";
+import { WattsIcon } from "../branding/WattsIcon";
+import { AppFooter } from "./AppFooter";
 
 type NavItem = {
   name: string;
   href: string;
   icon: typeof LayoutDashboard;
   roles?: ("Admin" | "HR")[];
+  mainOnly?: boolean;
 };
 
 const navigation: NavItem[] = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Employees", href: "/employees", icon: Users },
+  { name: "Attendance Records", href: "/attendance-records", icon: ListChecks, roles: ["Admin", "HR"], mainOnly: true },
   { name: "Late Records", href: "/lates", icon: Clock, roles: ["HR"] },
   { name: "Exemptions", href: "/exemptions", icon: ShieldCheck, roles: ["HR"] },
   { name: "Absences", href: "/absences", icon: UserX, roles: ["HR"] },
+  { name: "Leave", href: "/leave", icon: Palmtree, roles: ["HR"] },
   { name: "Undertime", href: "/undertime", icon: Timer, roles: ["HR"] },
   { name: "Half-Day", href: "/half-day", icon: CalendarRange, roles: ["HR"] },
   { name: "Recycle Bin", href: "/recycle-bin", icon: Trash2, roles: ["HR"] },
   { name: "Approvals", href: "/approvals", icon: ClipboardCheck, roles: ["Admin"] },
+  { name: "Absence Records", href: "/absence-records", icon: UserX, roles: ["Admin"] },
+];
+
+const navigationGroups = [
+  { label: "Overview", items: navigation.filter((item) => ["/", "/employees", "/attendance-records", "/lates"].includes(item.href)) },
+  { label: "Attendance Management", items: navigation.filter((item) => ["/exemptions", "/absences", "/leave", "/undertime", "/half-day", "/approvals", "/absence-records"].includes(item.href)) },
+  { label: "System", items: navigation.filter((item) => item.href === "/recycle-bin") },
 ];
 
 function formatMonthLabel(monthKey: string) {
@@ -64,6 +78,7 @@ type SidebarContentProps = {
   pathname: string;
   workspace: string | null;
   role: "Admin" | "HR" | null;
+  hrScope: "ITC" | "MAIN" | null;
   trashCount: number;
   onSignOut: () => void;
   onNavigate?: () => void;
@@ -73,6 +88,7 @@ function SidebarContent({
   pathname,
   workspace,
   role,
+  hrScope,
   trashCount,
   onSignOut,
   onNavigate,
@@ -80,9 +96,7 @@ function SidebarContent({
   return (
     <>
       <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-200">
-        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-600 to-brand-800 flex items-center justify-center shadow-sm">
-          <Clock className="w-4 h-4 text-white" />
-        </div>
+        <WattsIcon className="h-9 w-9 flex-none drop-shadow-sm" />
         <div className="min-w-0">
           <p className="text-[15px] font-bold text-slate-900 leading-tight">
             WATTS APP
@@ -93,13 +107,14 @@ function SidebarContent({
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
-        <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
-          Menu
-        </p>
-
-        <ul className="space-y-0.5">
-          {navigation.filter((item) => !item.roles || (role && item.roles.includes(role))).map((item) => {
+      <nav className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="space-y-4">
+          {navigationGroups.map((group) => {
+            const visibleItems = group.items.filter((item) => (!item.roles || (role && item.roles.includes(role))) && (!item.mainOnly || hrScope === "MAIN"));
+            if (visibleItems.length === 0) return null;
+            return <section key={group.label}>
+              <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-400">{group.label}</p>
+              <ul className="space-y-0.5">{visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
             const showTrashBadge =
@@ -110,14 +125,14 @@ function SidebarContent({
                 <Link
                   to={item.href}
                   onClick={onNavigate}
-                  className={`group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  className={`group relative flex min-h-9 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                     isActive
                       ? "bg-brand-50 text-brand-700"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                   }`}
                 >
                   {isActive && (
-                    <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-brand-600" />
+                    <span className="absolute bottom-1.5 left-0 top-1.5 w-0.5 rounded-r bg-brand-600" />
                   )}
                   <Icon
                     className={`w-4 h-4 ${
@@ -129,7 +144,7 @@ function SidebarContent({
                   <span className="truncate flex-1">{item.name}</span>
                   {showTrashBadge && (
                     <span
-                      className="ml-auto inline-flex min-w-[18px] h-4 items-center justify-center rounded-full bg-slate-200 px-1.5 text-[10px] font-semibold text-slate-700"
+                      className="ml-auto inline-flex h-4 min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1.5 text-[10px] font-semibold text-slate-700"
                       aria-label={`${trashCount} items in Trash`}
                     >
                       {trashCount > 99 ? "99+" : trashCount}
@@ -138,8 +153,10 @@ function SidebarContent({
                 </Link>
               </li>
             );
+              })}</ul>
+            </section>;
           })}
-        </ul>
+        </div>
       </nav>
 
       <div className="border-t border-slate-200 p-3">
@@ -149,7 +166,7 @@ function SidebarContent({
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-slate-900 truncate">
-              {workspace ?? "No workspace"}
+              {workspace === "WAIS" ? "Main Office" : workspace === "APP" ? "ITC Plant" : "No workspace"}
             </p>
             <p className="text-[11px] text-slate-500 truncate">
               {role ? `${role} access` : "Signed in"}
@@ -184,13 +201,15 @@ export function RootLayout() {
     exemptions,
   } = useAttendance();
 
-  const { workspace, signOut } = useAuth();
-  const { role } = useAuth();
+  const { workspace, hrScope, role, signOut } = useAuth();
   const [attendanceNotifications, setAttendanceNotifications] = useState<AttendanceNotification[]>([]);
 
   useEffect(() => {
     if (!role) { setAttendanceNotifications([]); return; }
-    void loadAttendanceNotifications(role, workspace).then(setAttendanceNotifications).catch(() => setAttendanceNotifications([]));
+    const refresh = () => { void loadAttendanceNotifications(role, workspace).then(setAttendanceNotifications).catch(() => setAttendanceNotifications([])); };
+    refresh();
+    window.addEventListener("attendance-notifications-changed", refresh);
+    return () => window.removeEventListener("attendance-notifications-changed", refresh);
   }, [role, workspace, exemptions]);
   const [isBellOpen, setIsBellOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
@@ -220,6 +239,7 @@ export function RootLayout() {
           pathname={location.pathname}
           workspace={workspace}
           role={role}
+          hrScope={hrScope}
           trashCount={deletedAttendanceCount}
           onSignOut={handleSignOut}
         />
@@ -245,6 +265,7 @@ export function RootLayout() {
               pathname={location.pathname}
               workspace={workspace}
               role={role}
+              hrScope={hrScope}
               trashCount={deletedAttendanceCount}
               onSignOut={() => {
                 setIsMobileNavOpen(false);
@@ -312,7 +333,7 @@ export function RootLayout() {
                             Notifications
                           </p>
                           <p className="text-xs text-slate-500">
-                            {role === "Admin" ? "Exemption approvals and memo reminders" : "Exemption decisions and memo reminders"}
+                            {role === "Admin" ? "Pending approvals and memo reminders" : "Approval decisions and memo reminders"}
                           </p>
                         </div>
 
@@ -329,9 +350,9 @@ export function RootLayout() {
                       </div>
 
                       <div className="max-h-[360px] overflow-y-auto">
-                        <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">Exemption updates</div>
-                        {attendanceNotifications.length === 0 && <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-3"><p className="text-xs font-semibold text-slate-700">Exemption inbox</p><p className="mt-1 text-xs leading-5 text-slate-500">{role === "Admin" ? "No pending exemptions in this workspace." : "No approved or declined exemptions submitted by you."}</p></div>}
-                        {attendanceNotifications.map((notification) => <div key={notification.id} className={`border-b border-slate-100 px-4 py-3 ${notification.status === "approved" ? "bg-success-50/40" : notification.status === "declined" ? "bg-danger-50/40" : "bg-warning-50/40"}`}><div className="flex items-start gap-3"><div className={`mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-full ${notification.status === "approved" ? "bg-success-100 text-success-700" : notification.status === "declined" ? "bg-danger-100 text-danger-700" : "bg-warning-100 text-warning-700"}`}>{notification.status === "approved" ? <CheckCircle2 className="h-4 w-4" /> : notification.status === "declined" ? <XCircle className="h-4 w-4" /> : <Clock className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><p className="text-sm font-semibold text-slate-900">{notification.employeeName}</p><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${notification.status === "approved" ? "bg-success-100 text-success-700" : notification.status === "declined" ? "bg-danger-100 text-danger-700" : "bg-warning-100 text-warning-700"}`}>{notification.status}</span></div><p className="mt-1 text-xs font-medium text-slate-600">{notification.title}</p><p className="mt-1 text-[11px] text-slate-500">Attendance date: {notification.workDate} • Late time: {notification.lateTime}</p>{notification.createdAt && <p className="mt-1 text-[11px] text-slate-400">Updated {new Date(notification.createdAt).toLocaleString()}</p>}</div></div></div>)}
+                        <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">Approval updates</div>
+                        {attendanceNotifications.length === 0 && <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-3"><p className="text-xs font-semibold text-slate-700">Approval inbox</p><p className="mt-1 text-xs leading-5 text-slate-500">{role === "Admin" ? "No pending approval requests." : "No exemption or leave decisions submitted by you."}</p></div>}
+                        {attendanceNotifications.map((notification) => { const denied = notification.status === "declined" || notification.status === "rejected"; return <div key={notification.id} className={`border-b border-slate-100 px-4 py-3 ${notification.status === "approved" ? "bg-success-50/40" : denied ? "bg-danger-50/40" : "bg-warning-50/40"}`}><div className="flex items-start gap-3"><div className={`mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-full ${notification.status === "approved" ? "bg-success-100 text-success-700" : denied ? "bg-danger-100 text-danger-700" : "bg-warning-100 text-warning-700"}`}>{notification.status === "approved" ? <CheckCircle2 className="h-4 w-4" /> : denied ? <XCircle className="h-4 w-4" /> : <Clock className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><p className="text-sm font-semibold text-slate-900">{notification.employeeName}</p><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${notification.status === "approved" ? "bg-success-100 text-success-700" : denied ? "bg-danger-100 text-danger-700" : "bg-warning-100 text-warning-700"}`}>{notification.status}</span></div><p className="mt-1 text-xs font-medium text-slate-600">{notification.title}</p><p className="mt-1 text-[11px] text-slate-500">Date: {notification.workDate} • Time: {notification.lateTime}</p>{notification.createdAt && <p className="mt-1 text-[11px] text-slate-400">Updated {new Date(notification.createdAt).toLocaleString()}</p>}</div></div></div>; })}
                         <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">Late notifications</div>
                         {memoAlerts.length === 0 ? (
                           <div className="px-4 py-10 text-center">
@@ -390,7 +411,7 @@ export function RootLayout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8">
           <div
             key={location.pathname}
             className="ui-fade-in-up max-w-7xl mx-auto"
@@ -398,6 +419,7 @@ export function RootLayout() {
             <Outlet />
           </div>
         </main>
+        <AppFooter compact />
       </div>
     </div>
   );

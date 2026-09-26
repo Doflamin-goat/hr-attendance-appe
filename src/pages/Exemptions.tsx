@@ -8,8 +8,11 @@ import {
 } from "lucide-react";
 import { useAttendance, type Exemption, type LateRecord } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
+import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
+import { useAuth } from "../context/AuthContext";
 import { loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption } from "../services/attendanceService";
-import { describeSubmitExemptionError, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
+import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
+import { informedPeopleForScope } from "../utils/informedPeople";
 import {
   PageHeader,
   Card,
@@ -49,6 +52,7 @@ type RestoreTarget = { id: string; name: string; date: string } | null;
 type DeleteTarget = { id: string; name: string; date: string } | null;
 
 export function Exemptions() {
+  const { workspace, hrScope } = useAuth();
   const {
     loading,
     exemptions,
@@ -59,11 +63,11 @@ export function Exemptions() {
   } = useAttendance();
   const { activeEmployees } = useEmployees();
 
-  const [formData, setFormData] = useState({ employeeId: "", employeeName: "", reason: "", date: "", time: "", informed: [] as string[] });
+  const [formData, setFormData] = useState({ employeeId: "", employeeName: "", reason: "", date: "", informed: [] as string[] });
   const [lateRecordId, setLateRecordId] = useState("");
   const [workflowData, setWorkflowData] = useState<{ lateRecords: LateRecord[]; exemptions: Exemption[] }>({ lateRecords: [], exemptions: [] });
   const employeeOptions = useMemo(() => [...activeEmployees].sort((a, b) => a.fullName.localeCompare(b.fullName)), [activeEmployees]);
-  const informedOptions = ["Sir Gatch", "Ma’am Chona", "HR Louissa"];
+  const informedOptions = informedPeopleForScope(hrScope);
   const selectedEmployee = useMemo(() => activeEmployees.find((employee) => employee.id === formData.employeeId), [activeEmployees, formData.employeeId]);
   const matchingLates = useMemo(() => matchingLinkedLateRecords(workflowData.lateRecords, workflowData.exemptions, selectedEmployee?.fullName ?? "", formData.date), [workflowData, formData.date, selectedEmployee?.fullName]);
   const selectedLate = matchingLates.find((item) => item.id === lateRecordId);
@@ -72,11 +76,11 @@ export function Exemptions() {
     counts.set(key, (counts.get(key) ?? 0) + 1);
     return counts;
   }, new Map<string, number>()), [matchingLates]);
-  const refreshWorkflowData = async () => setWorkflowData(await loadCrossWorkspaceExemptionWorkflowData());
+  const refreshWorkflowData = async () => { if (workspace) setWorkflowData(await loadCrossWorkspaceExemptionWorkflowData(workspace)); };
   useEffect(() => {
     const load = async () => { await refreshWorkflowData(); };
     void load();
-  }, []);
+  }, [workspace]);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -84,6 +88,11 @@ export function Exemptions() {
   const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyYear, setHistoryYear] = useState("all");
+  const [historyMonth, setHistoryMonth] = useState("all");
+  const [historyStatus, setHistoryStatus] = useState<"all" | "pending" | "approved" | "declined">("all");
+  const [historySort, setHistorySort] = useState<"newest" | "oldest">("newest");
 
   const monthOptions = useMemo(() => {
     const uniqueMonths = Array.from(
@@ -93,19 +102,21 @@ export function Exemptions() {
   }, [exemptions]);
 
   const [selectedMonth, setSelectedMonth] = useState<string>("all");
+  const historyYears = useMemo(() => [...new Set(exemptions.map((record) => String(getSafeDate(record.date).getFullYear())))].sort((a, b) => b.localeCompare(a)), [exemptions]);
 
-  const filteredExemptions = useMemo(() => {
-    const filtered =
-      selectedMonth === "all"
-        ? exemptions
-        : exemptions.filter(
-            (record) => getMonthKey(record.date) === selectedMonth
-          );
-
-    return [...filtered].sort(
-      (a, b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime()
-    );
-  }, [exemptions, selectedMonth]);
+  const filteredExemptions = useMemo(() => filterExemptionHistory(exemptions, {
+    search: historySearch,
+    year: historyYear,
+    month: historyMonth,
+    status: historyStatus,
+    sort: historySort,
+  }), [exemptions, historySearch, historyYear, historyMonth, historyStatus, historySort]);
+  const exemptionSummary = useMemo(() => ({
+    total: filteredExemptions.length,
+    approved: filteredExemptions.filter((record) => record.approvalStatus === "approved").length,
+    declined: filteredExemptions.filter((record) => record.approvalStatus === "declined").length,
+    pending: filteredExemptions.filter((record) => !record.approvalStatus || record.approvalStatus === "pending").length,
+  }), [filteredExemptions]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,27 +135,25 @@ export function Exemptions() {
       return;
     }
     try {
-      await submitLinkedExemption({ employeeId: selectedEmployee.id, lateRecordId: Number(selectedLate.id), reason: formData.reason, reportedTime: formData.time || undefined, informedParties: formData.informed });
+      await submitLinkedExemption({ employeeId: selectedEmployee.id, lateRecordId: Number(selectedLate.id), reason: formData.reason, informedParties: formData.informed });
       await refreshAttendanceData();
       await refreshWorkflowData();
       setFeedback({ type: "success", message: "Exemption submitted as Pending. The linked late remains counted until approval." });
       setSelectedMonth(getMonthKey(formData.date));
-      setFormData({ employeeId: "", employeeName: "", reason: "", date: "", time: "", informed: [] });
+      setFormData({ employeeId: "", employeeName: "", reason: "", date: "", informed: [] });
       setLateRecordId("");
     } catch (error) {
       setFeedback({ type: "error", message: describeSubmitExemptionError(error) });
     }
   };
 
-  const handleDeleteMonth = () => {
-    deleteExemptionsByMonth(selectedMonth);
+  const handleDeleteMonth = async () => {
+    const result = await deleteExemptionsByMonth(selectedMonth);
     setFeedback({
-      type: "success",
-      message: `All exemption records for ${formatMonthLabel(
-        selectedMonth
-      )} were moved to Trash. Their late records are back in Late Records.`,
+      type: result.success ? "success" : "error",
+      message: result.success ? `All exemption records for ${formatMonthLabel(selectedMonth)} were moved to Trash. Their late records are back in Late Records.` : result.message,
     });
-    setSelectedMonth("all");
+    if (result.success) setSelectedMonth("all");
     setConfirmDeleteMonth(false);
   };
 
@@ -158,9 +167,10 @@ export function Exemptions() {
     } catch { setFeedback({ type: "error", message: "Could not restore the linked late record." }); }
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
-    deleteExemption(deleteTarget.id);
+    const result = await deleteExemption(deleteTarget.id);
+    if (!result.success) { toast.error("Delete failed", result.message); return; }
     setDeleteTarget(null);
     toast.success("Record moved to Trash.");
   };
@@ -206,11 +216,8 @@ export function Exemptions() {
               <Select label="Matching Late Record" required value={lateRecordId} disabled={!formData.employeeId || !formData.date || matchingLates.length === 0} onChange={(event) => setLateRecordId(event.target.value)} hint="Choose the exact late arrival to exempt."><option value="">{matchingLates.length === 0 ? "No eligible late record" : "Select matching late"}</option>{matchingLates.map((late) => { const key = `${late.timeIn}|${late.minutesLate}`; return <option key={late.id} value={late.id}>{late.timeIn ?? "Recorded late"} — {late.minutesLate ?? 0} minutes late{(lateLabelCounts.get(key) ?? 0) > 1 ? ` • Record ${late.id}` : ""}</option>; })}</Select>
               {formData.employeeName && formData.date && matchingLates.length === 0 && <p className="-mt-2 text-xs text-slate-500">No active, unlinked uploaded late record matches this employee and date.</p>}
 
-              <Input label="Time (optional)" type="time" value={formData.time} onChange={(e) => setFormData({ ...formData, time: e.target.value })} />
-
               <fieldset>
-                <legend className="text-sm font-medium text-slate-700">Who was informed <span className="font-normal text-slate-400">(optional)</span></legend>
-                <div className="mt-2 space-y-2"><SearchableCombobox label="Informed to" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+              <div className="space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
               </fieldset>
 
               <Textarea
@@ -238,40 +245,31 @@ export function Exemptions() {
         </div>
 
         <div className="lg:col-span-2 space-y-4">
-          <Card>
-            <SectionHeader
-              icon={<CalendarDays className="w-5 h-5" />}
-              iconTone="neutral"
-              title="Month Filter"
-              description="View and manage exemptions by month."
-              actions={
-                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                  <Select
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="sm:w-52"
-                  >
-                    <option value="all">All Months</option>
-                    {monthOptions.map((month) => (
-                      <option key={month} value={month}>
-                        {formatMonthLabel(month)}
-                      </option>
-                    ))}
-                  </Select>
-
-                  {selectedMonth !== "all" && (
-                    <Button
-                      variant="danger"
-                      leftIcon={<Trash2 className="w-4 h-4" />}
-                      onClick={() => setConfirmDeleteMonth(true)}
-                    >
-                      Delete Month
-                    </Button>
-                  )}
+          <>
+            <Card>
+              <SectionHeader icon={<CalendarDays className="w-5 h-5" />} iconTone="neutral" title="Search & Filters" description="Review exemption history by employee, date, status, and order." />
+              <div className="mt-4 space-y-3">
+                <Input label="Search Employee" type="search" placeholder="Search employee" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <Select label="Year" value={historyYear} onChange={(event) => setHistoryYear(event.target.value)}><option value="all">All Years</option>{historyYears.map((item) => <option key={item}>{item}</option>)}</Select>
+                  <Select label="Month" value={historyMonth} onChange={(event) => setHistoryMonth(event.target.value)}><option value="all">All Months</option>{Array.from({ length: 12 }, (_, index) => { const value = String(index + 1).padStart(2, "0"); return <option key={value} value={value}>{new Date(2000, index, 1).toLocaleDateString("en-US", { month: "long" })}</option>; })}</Select>
+                  <Select label="Status" value={historyStatus} onChange={(event) => setHistoryStatus(event.target.value as typeof historyStatus)}><option value="all">All Statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="declined">Declined</option></Select>
+                  <Select label="Sort By" value={historySort} onChange={(event) => setHistorySort(event.target.value as typeof historySort)}><option value="newest">Newest First</option><option value="oldest">Oldest First</option></Select>
                 </div>
-              }
-            />
-          </Card>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <Select label="Delete Month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} className="sm:w-52">
+                    <option value="all">Select month</option>
+                    {monthOptions.map((month) => <option key={month} value={month}>{formatMonthLabel(month)}</option>)}
+                  </Select>
+                  {selectedMonth !== "all" && <Button variant="danger" leftIcon={<Trash2 className="w-4 h-4" />} onClick={() => setConfirmDeleteMonth(true)}>Delete {formatMonthLabel(selectedMonth)}</Button>}
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <SectionHeader title="Exemption Summary" description={historySearch.trim() ? `Counts for employees matching “${historySearch.trim()}”.` : "Counts for the currently filtered record set."} />
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">{[["Total Requests", exemptionSummary.total], ["Approved", exemptionSummary.approved], ["Declined", exemptionSummary.declined], ["Pending", exemptionSummary.pending]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold text-slate-900">{value}</p></div>)}</div>
+            </Card>
+          <div className="px-1"><SectionHeader title="Saved Exemption Records" description={`${filteredExemptions.length} record${filteredExemptions.length === 1 ? "" : "s"} match the current filters.`} /></div>
 
           {loading ? (
             <Card padded={false}>
@@ -282,14 +280,10 @@ export function Exemptions() {
               <EmptyState
                 icon={<ShieldCheck className="w-6 h-6" />}
                 title={
-                  selectedMonth === "all"
-                    ? "No exemptions found"
-                    : `No exemptions for ${formatMonthLabel(selectedMonth)}`
+                  "No exemptions found"
                 }
                 description={
-                  selectedMonth === "all"
-                    ? "Use the form on the left to submit an exemption for approval."
-                    : "Switch the filter or add an exemption from the form on the left."
+                  "Use the form on the left to submit an exemption for approval."
                 }
                 bordered={false}
               />
@@ -302,14 +296,6 @@ export function Exemptions() {
                   {filteredExemptions.length}
                 </span>{" "}
                 record(s)
-                {selectedMonth !== "all" && (
-                  <>
-                    {" "}for{" "}
-                    <span className="font-semibold text-slate-900">
-                      {formatMonthLabel(selectedMonth)}
-                    </span>
-                  </>
-                )}
               </p>
 
               <ul className="space-y-2">
@@ -319,7 +305,6 @@ export function Exemptions() {
                   const informedPeople = Array.isArray(record.informed)
                     ? record.informed.filter((person) => typeof person === "string" && person.trim())
                     : [];
-                  const hasOptionalDetails = Boolean(reportedTime || informedPeople.length > 0);
 
                   return (
                     <li
@@ -328,9 +313,7 @@ export function Exemptions() {
                     >
                       <div className="absolute left-0 top-0 bottom-0 w-1 bg-brand-500" />
                       <div className="flex items-start gap-4 pl-2">
-                        <div className="w-10 h-10 rounded-full bg-brand-50 text-brand-700 border border-brand-100 flex items-center justify-center font-semibold text-xs uppercase flex-shrink-0">
-                          {record.name.substring(0, 2)}
-                        </div>
+                        <EmployeeAvatar name={record.name} />
 
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
@@ -383,7 +366,7 @@ export function Exemptions() {
                             {record.reason}
                           </div>
                           <p className="mt-2 text-xs text-slate-500">Linked late: {record.lateTime || "Not recorded"} • {record.minutesLate ?? 0} minute(s)</p>
-                          {hasOptionalDetails && <p className="mt-2 text-xs text-slate-500">{reportedTime ? `Time: ${reportedTime}` : ""}{reportedTime && informedPeople.length > 0 ? " • " : ""}{informedPeople.length > 0 ? `Informed: ${informedPeople.join(", ")}` : ""}</p>}
+                          {(reportedTime || informedPeople.length > 0) && <p className="mt-2 text-xs text-slate-500">{reportedTime ? `Time: ${reportedTime}` : ""}{reportedTime && informedPeople.length > 0 ? " • " : ""}{informedPeople.length > 0 ? `Informed: ${informedPeople.join(", ")}` : ""}</p>}
                           {record.reviewedAt && <p className="mt-2 text-xs text-slate-500">Reviewer: {record.reviewedBy ? "Admin" : "Not recorded"} • Reviewed: {new Date(record.reviewedAt).toLocaleString()} • Remarks: {record.reviewRemarks || "None"}</p>}
                           {record.lateRestoredAt && <p className="mt-2 text-xs font-medium text-warning-700">Late Record Restored • {new Date(record.lateRestoredAt).toLocaleString()}</p>}
                         </div>
@@ -394,6 +377,7 @@ export function Exemptions() {
               </ul>
             </>
           )}
+          </>
         </div>
       </div>
 
