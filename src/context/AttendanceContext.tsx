@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
+import { computeExcelColumnWidth, sortAttendanceDetailRecords, toExcelCalendarDate } from "../utils/exportRows";
 import { useAuth } from "./AuthContext";
 import { useEmployees } from "./EmployeesContext";
 import {
@@ -1605,7 +1606,7 @@ const getTeam = (name: string) => {
       title: string,
       subtitle: string
     ) => {
-      sheet.views = [{ showGridLines: false }];
+      sheet.views = [{ showGridLines: false, state: "frozen", ySplit: 2 }];
 
       sheet.columns = [
         { width: 30 },
@@ -1650,6 +1651,17 @@ const getTeam = (name: string) => {
 
       sheet.getRow(1).height = 24;
       sheet.getRow(2).height = 20;
+    };
+
+    const applyContentAwareColumnWidths = (sheet: ExcelJS.Worksheet) => {
+      sheet.columns.forEach((column) => {
+        if ((column.width ?? 0) <= 4) return;
+        const values: unknown[] = [];
+        column.eachCell?.({ includeEmpty: false }, (cell) => {
+          if (!cell.isMerged) values.push(cell.value);
+        });
+        column.width = computeExcelColumnWidth(values, Math.max(12, column.width ?? 12), 38);
+      });
     };
 
     const setCard = (
@@ -1760,7 +1772,7 @@ const getTeam = (name: string) => {
       sheet: ExcelJS.Worksheet,
       startRow: number,
       startCol: number,
-      rows: (string | number)[][],
+      rows: (string | number | Date)[][],
       memoColumnIndex?: number
     ) => {
       const finalRows = rows.length ? rows : [["No data"]];
@@ -1776,6 +1788,7 @@ const getTeam = (name: string) => {
         rowData.forEach((value, index) => {
           const cell = sheet.getCell(row, startCol + index);
           cell.value = value;
+          if (value instanceof Date) cell.numFmt = "mm/dd/yyyy";
 
           cell.font = {
             name: "Arial",
@@ -1785,8 +1798,9 @@ const getTeam = (name: string) => {
           };
 
           cell.alignment = {
-            horizontal: index === 0 ? "left" : "center",
+            horizontal: index === 0 ? "left" : typeof value === "number" ? "right" : "center",
             vertical: "middle",
+            wrapText: typeof value === "string" && value.length > 36,
           };
 
           cell.border = thinBorder;
@@ -1809,7 +1823,7 @@ const getTeam = (name: string) => {
       groups: {
         label: string;
         team: string;
-        rows: (string | number)[][];
+        rows: (string | number | Date)[][];
         memoColumnIndex?: number;
       }[]
     ) => {
@@ -1850,9 +1864,9 @@ const getTeam = (name: string) => {
       ]);
 
     const lateRows = (items: LateRecord[]) =>
-      items.map((item) => [
+      sortAttendanceDetailRecords(items).map((item) => [
         item.name,
-        item.date,
+        toExcelCalendarDate(item.date),
         item.timeIn,
         item.minutesLate,
         item.secondsLate,
@@ -1860,23 +1874,23 @@ const getTeam = (name: string) => {
       ]);
 
     const exemptionRows = (items: Exemption[]) =>
-      items.map((item) => [item.name, item.date, item.reason]);
+      sortAttendanceDetailRecords(items).map((item) => [item.name, toExcelCalendarDate(item.date), item.reason]);
 
     const absenceRows = (items: AbsentRecord[]) =>
-      items.map((item) => [item.name, item.date, item.reason, "Manual"]);
+      sortAttendanceDetailRecords(items).map((item) => [item.name, toExcelCalendarDate(item.date), item.reason, "Manual"]);
 
     const systemUndertimeRows = (items: GeneratedUndertime[]) =>
-      items.map((item) => [
+      sortAttendanceDetailRecords(items).map((item) => [
         item.name,
-        item.date,
+        toExcelCalendarDate(item.date),
         item.timeIn,
         item.sourceFileName,
       ]);
 
     const manualUndertimeRows = (items: UndertimeRecord[]) =>
-      items.map((item) => [
+      sortAttendanceDetailRecords(items).map((item) => [
         item.name,
-        item.date,
+        toExcelCalendarDate(item.date),
         item.reason,
         item.undertimeHours,
       ]);
@@ -2057,6 +2071,9 @@ const getTeam = (name: string) => {
         },
       ]
     );
+
+    applyContentAwareColumnWidths(lateSheet);
+    applyContentAwareColumnWidths(absenceSheet);
 
     workbook.creator = "WATTS APP HR Attendance System";
     workbook.created = new Date();

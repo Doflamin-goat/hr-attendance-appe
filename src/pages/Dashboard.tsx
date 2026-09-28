@@ -82,7 +82,8 @@ type ConfirmState =
 type UploadedFileRow = {
   id: string;
   fileName: string;
-  uploadedAt: string;
+  uploadedDate: string;
+  uploadedTime: string;
   lates: number;
   undertime: number;
   attendanceRange: string;
@@ -224,10 +225,12 @@ export function Dashboard() {
         return ({
         id: file.id,
         fileName: file.fileName,
-        uploadedAt: new Date(file.uploadedAt).toLocaleString("en-US", {
+        uploadedDate: new Date(file.uploadedAt).toLocaleDateString("en-US", {
           year: "numeric",
           month: "short",
           day: "2-digit",
+        }),
+        uploadedTime: new Date(file.uploadedAt).toLocaleTimeString("en-US", {
           hour: "2-digit",
           minute: "2-digit",
         }),
@@ -452,10 +455,12 @@ export function Dashboard() {
       ) : <span className="text-sm text-slate-500">View only</span>,
     },
     {
-      key: "uploadedAt",
+      key: "uploaded",
       header: "Uploaded",
+      className: "min-w-[190px] whitespace-nowrap",
+      headerClassName: "min-w-[190px]",
       render: (row) => (
-        <span className="text-sm text-slate-600">{row.uploadedAt}</span>
+        <span className="inline-flex items-baseline gap-2 whitespace-nowrap text-sm"><span className="text-slate-600">{row.uploadedDate}</span><span className="text-xs text-slate-400">{row.uploadedTime}</span></span>
       ),
     },
     {
@@ -505,6 +510,9 @@ export function Dashboard() {
       ),
     },
   ];
+  const visibleUploadedColumns = hrScope === "ITC"
+    ? uploadedColumns.filter((column) => !["attendanceRange", "matched", "unmatched"].includes(column.key))
+    : uploadedColumns;
 
   const scopeChip = (
     <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -1005,7 +1013,7 @@ export function Dashboard() {
             </div>
           ) : (
             <DataTable
-              columns={uploadedColumns}
+              columns={visibleUploadedColumns}
               rows={uploadedRows}
               rowKey={(row) => row.id}
               dense

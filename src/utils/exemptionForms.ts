@@ -72,19 +72,21 @@ export function normalizeEmployeeName(value: string) {
 
 export type ExemptionHistoryFilters = {
   search: string;
+  employeeId?: string;
   year: string;
   month: string;
   status: "all" | "pending" | "approved" | "declined";
   sort: "newest" | "oldest";
 };
 
-export function filterExemptionHistory<T extends { name: string; date: string; approvalStatus?: "pending" | "approved" | "declined" }>(records: T[], filters: ExemptionHistoryFilters) {
+export function filterExemptionHistory<T extends { employeeId?: string; name: string; date: string; approvalStatus?: "pending" | "approved" | "declined" }>(records: T[], filters: ExemptionHistoryFilters) {
   const search = normalizeEmployeeName(filters.search);
   return records.filter((record) => {
     const date = new Date(record.date);
     const year = String(date.getFullYear());
     const month = String(date.getMonth() + 1).padStart(2, "0");
-    return (!search || normalizeEmployeeName(record.name).includes(search)) &&
+    return (!filters.employeeId || record.employeeId === filters.employeeId) &&
+      (!search || normalizeEmployeeName(record.name).includes(search)) &&
       (filters.year === "all" || year === filters.year) &&
       (filters.month === "all" || month === filters.month) &&
       (filters.status === "all" || (record.approvalStatus ?? "pending") === filters.status);
