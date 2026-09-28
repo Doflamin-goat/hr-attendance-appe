@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:focused": "node --test tests/role-and-attendance-forms.test.mts",
+    "test:focused": "node --test tests/role-and-attendance-forms.test.mts tests/main-attendance-sources-rls.test.mts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "@eslint/js": "^9.39.4",
     "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^24.12.0",
