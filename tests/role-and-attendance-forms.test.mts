@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import ExcelJS from "exceljs";
 import { canAccessPath } from "../src/utils/access.ts";
 import { activeEmployeeOptions, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../src/utils/attendanceForms.ts";
 import { LOGIN_ACCOUNTS } from "../src/utils/loginAccounts.ts";
@@ -8,6 +9,7 @@ import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalRep
 import { adjustmentPartsToMinutes, ANNUAL_LEAVE_ENTITLEMENT_MINUTES, calculateAnnualLeaveTotals, calculateLeaveDuration, countRejectedLeaveRequests, formatLeaveDate, formatLeaveMinutes, formatLeaveRequestDuration, formatLeaveStatus, formatLeaveTime, leaveBalance, remainingLeaveAdjustment } from "../src/utils/leaveRules.ts";
 import { activeMainAttendanceRecordIds, aggregateMainAttendance, checkoutUndertimeMinutes, isItcAttendanceRows, isMainAttendanceHeader, isValidFinalCheckout, mainWorkDateOptions, normalizeMainName, resolveManualCheckout, systemAbsenceEmployeeIds, validateAttendanceFormat } from "../src/utils/mainAttendance.ts";
 import { informedPeopleForScope } from "../src/utils/informedPeople.ts";
+import { attendanceDateValue, attendanceTimeValue, computeExcelColumnWidth, sortAttendanceDetailRecords, toExcelCalendarDate } from "../src/utils/exportRows.ts";
 
 const mainHeader = ["Department", "Name", "No.", "Date/Time", "Status", "Location ID", "ID Number", "VerifyCode", "CardNo"];
 const mainEmployees = [
@@ -1515,4 +1517,110 @@ test("manual attendance mutations are database-first and failures remain visible
   assert.match(context, /await deleteManualUndertimeRecord\(id,[\s\S]*?await applyDatabaseData\(false\)/);
   assert.match(context, /await softDeleteManualLateRecord\(id,[\s\S]*?await applyDatabaseData\(false\)/);
   assert.match(service, /for \(const table of tables\)[\s\S]*?if \(error\) errors\.push[\s\S]*?failed: errors\.length/);
+});
+
+test("ITC File History hides matching diagnostics while MAIN keeps the complete column contract", () => {
+  const dashboard = readFileSync(new URL("../src/pages/Dashboard.tsx", import.meta.url), "utf8");
+  assert.match(dashboard, /hrScope === "ITC"[\s\S]*?uploadedColumns\.filter/);
+  assert.match(dashboard, /\["attendanceRange", "matched", "unmatched"\]/);
+  assert.match(dashboard, /: uploadedColumns/);
+  assert.match(dashboard, /min-w-\[190px\][\s\S]*?inline-flex[\s\S]*?uploadedDate[\s\S]*?text-slate-400[\s\S]*?uploadedTime/);
+});
+
+test("ITC history pages reuse the scoped searchable Employee Master filter", () => {
+  const component = readFileSync(new URL("../src/components/employees/EmployeeFilterCombobox.tsx", import.meta.url), "utf8");
+  const exemptions = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  const absences = readFileSync(new URL("../src/pages/Absences.tsx", import.meta.url), "utf8");
+  const leave = readFileSync(new URL("../src/components/leave/LeaveRegistry.tsx", import.meta.url), "utf8");
+  assert.match(component, /SearchableCombobox/);
+  assert.match(component, /placeholder="Search or select employee"/);
+  assert.match(component, /onClear=\{\(\) => onChange\(""\)\}/);
+  assert.match(component, /Clear employee filter/);
+  assert.match(exemptions, /hrScope === "ITC" \? <EmployeeFilterCombobox employees=\{activeEmployees\}/);
+  assert.match(absences, /EmployeeFilterCombobox employees=\{activeEmployees\}/);
+  assert.match(leave, /hrScope === "ITC" \? <EmployeeFilterCombobox employees=\{employees\}/);
+});
+
+test("employee ID filtering remains exact and combines with exemption history filters", () => {
+  const rows = [
+    { employeeId: "itc-1", name: "Doe, John", date: "2026-01-02", approvalStatus: "approved" as const },
+    { employeeId: "itc-2", name: "Doe, John", date: "2026-01-03", approvalStatus: "approved" as const },
+    { employeeId: "itc-1", name: "Doe, John", date: "2025-01-03", approvalStatus: "pending" as const },
+  ];
+  const result = filterExemptionHistory(rows, { search: "", employeeId: "itc-1", year: "2026", month: "01", status: "approved", sort: "oldest" });
+  assert.deepEqual(result.map((row) => row.date), ["2026-01-02"]);
+});
+
+test("Undertime uses a safe separator and does not render the mojibake bullet", () => {
+  const page = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  assert.match(page, /\{record\.date\} \| \{record\.timeIn\}/);
+  assert.doesNotMatch(page, /Ã¢â‚¬Â¢|â€¢/);
+});
+
+test("Excel detail sorting is employee, calendar date, time, then stable source order", () => {
+  const source = [
+    { id: "d", name: "Bravo", date: "09/02/2026", timeIn: "08:00 AM" },
+    { id: "b", name: "Alpha", date: "09/10/2026", timeIn: "08:00 AM" },
+    { id: "c", name: "Alpha", date: "09/02/2026", timeIn: "09:00 AM" },
+    { id: "a", name: "Alpha", date: "09/02/2026", timeIn: "07:00 AM" },
+    { id: "a2", name: "Alpha", date: "09/02/2026", timeIn: "07:00 AM" },
+  ];
+  assert.deepEqual(sortAttendanceDetailRecords(source).map((row) => row.id), ["a", "a2", "c", "b", "d"]);
+  assert.equal(attendanceDateValue("09/02/2026") < attendanceDateValue("09/10/2026"), true);
+  assert.equal(attendanceTimeValue("07:00 AM") < attendanceTimeValue("09:00 AM"), true);
+  const excelDate = toExcelCalendarDate("2026-09-02");
+  assert.ok(excelDate instanceof Date);
+  assert.equal(excelDate.getFullYear(), 2026);
+  assert.equal(source.length, sortAttendanceDetailRecords(source).length);
+});
+
+test("Excel details use real date cells, numeric alignment, and frozen report headings", () => {
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  assert.match(context, /sortAttendanceDetailRecords\(items\)/);
+  assert.match(context, /toExcelCalendarDate\(item\.date\)/);
+  assert.match(context, /cell\.numFmt = "mm\/dd\/yyyy"/);
+  assert.match(context, /typeof value === "number" \? "right"/);
+  assert.match(context, /state: "frozen", ySplit: 2/);
+  assert.match(context, /applyContentAwareColumnWidths\(lateSheet\)/);
+  assert.match(context, /applyContentAwareColumnWidths\(absenceSheet\)/);
+});
+
+test("ITC Leave aligns the searchable employee and labeled year controls", () => {
+  const registry = readFileSync(new URL("../src/components/leave/LeaveRegistry.tsx", import.meta.url), "utf8");
+  assert.match(registry, /grid items-start gap-3 sm:grid-cols-\[minmax\(0,1fr\)_180px\]/);
+  assert.match(registry, /label=\{hrScope === "ITC" \? "Year" : undefined\}/);
+  assert.match(registry, /EmployeeFilterCombobox/);
+});
+
+test("four-digit slash dates retain the full 2026 year through ExcelJS serialization", async () => {
+  for (const input of ["2026-08-03", "08/03/2026", "2026-09-16", "09/16/2026"]) {
+    const converted = toExcelCalendarDate(input);
+    assert.ok(converted instanceof Date);
+    assert.equal(converted.getFullYear(), 2026);
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Dates");
+  sheet.getCell("A1").value = toExcelCalendarDate("2026-08-03");
+  sheet.getCell("A2").value = toExcelCalendarDate("09/16/2026");
+  sheet.getColumn(1).numFmt = "mm/dd/yyyy";
+  const buffer = await workbook.xlsx.writeBuffer();
+  const restored = new ExcelJS.Workbook();
+  await restored.xlsx.load(buffer);
+  const first = restored.getWorksheet("Dates")?.getCell("A1").value;
+  const second = restored.getWorksheet("Dates")?.getCell("A2").value;
+  assert.ok(first instanceof Date && second instanceof Date);
+  assert.equal(first.getFullYear(), 2026);
+  assert.equal(first.getMonth(), 7);
+  assert.equal(first.getDate(), 3);
+  assert.equal(second.getFullYear(), 2026);
+  assert.equal(second.getMonth(), 8);
+  assert.equal(second.getDate(), 16);
+});
+
+test("content-aware Excel widths fit common headers and filenames within safe caps", () => {
+  assert.ok(computeExcelColumnWidth(["Employee", "Agravio, John Maric"], 12, 38) >= 21);
+  assert.ok(computeExcelColumnWidth(["Source File", "Attendance September 25, 2026.xlsx"], 12, 38) >= 36);
+  assert.ok(computeExcelColumnWidth(["Employees with Lates"], 12, 38) >= 22);
+  assert.equal(computeExcelColumnWidth(["x".repeat(200)], 12, 38), 38);
 });

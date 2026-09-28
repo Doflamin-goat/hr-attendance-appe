@@ -271,7 +271,7 @@ export function Undertime() {
                       {record.name}
                     </p></div>
                     <p className="text-xs text-slate-500 mt-1">
-                      {record.date} â€¢ {record.timeIn}
+                      {record.date} | {record.timeIn}
                     </p>
                     {record.minutesUndertime !== undefined ? <p className="text-xs text-slate-500 mt-0.5">Undertime: {formatDuration(record.minutesUndertime)}</p> : null}
                     <p className="text-xs text-slate-500 mt-0.5">

@@ -6,6 +6,7 @@ import { cancelPendingLeaveRequest, removeLeaveRequest, setEmployeeRemainingLeav
 import { adjustmentPartsToMinutes, ANNUAL_LEAVE_ENTITLEMENT_MINUTES, calculateAnnualLeaveTotals, countRejectedLeaveRequests, formatLeaveDate, formatLeaveMinutes, formatLeaveRequestDuration, formatLeaveStatus, formatLeaveTime, LEAVE_WORKDAY_MINUTES } from "../../utils/leaveRules";
 import { AlertMessage, Badge, Button, Card, EmptyState, Input, SectionHeader, Select } from "../ui";
 import { EmployeeAvatar } from "../employees/EmployeeAvatar";
+import { EmployeeFilterCombobox } from "../employees/EmployeeFilterCombobox";
 
 type Props = {
   employees: Employee[];
@@ -29,8 +30,9 @@ function parts(total: number): Draft {
 }
 
 export function LeaveRegistry({ employees, requests, adjustments, year, onYearChange, canEditAdjustments = false, onAdjustmentSaved, showRejectedRequests = false }: Props) {
-  const { user } = useAuth();
+  const { user, hrScope } = useAuth();
   const [search, setSearch] = useState("");
+  const [filterEmployeeId, setFilterEmployeeId] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState("");
   const [draft, setDraft] = useState<Draft>(parts(0));
@@ -38,7 +40,7 @@ export function LeaveRegistry({ employees, requests, adjustments, year, onYearCh
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const yearNumber = Number(year);
   const years = useMemo(() => Array.from(new Set([String(new Date().getFullYear()), ...requests.map((item) => item.leaveDate.slice(0, 4)), ...adjustments.map((item) => String(item.leaveYear))])).sort((a, b) => b.localeCompare(a)), [requests, adjustments]);
-  const visibleEmployees = useMemo(() => employees.filter((employee) => employee.fullName.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())), [employees, search]);
+  const visibleEmployees = useMemo(() => employees.filter((employee) => hrScope === "ITC" ? !filterEmployeeId || employee.id === filterEmployeeId : employee.fullName.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())), [employees, filterEmployeeId, hrScope, search]);
   const selected = employees.find((employee) => employee.id === selectedId) ?? null;
   const selectedHistory = requests.filter((item) => item.employeeId === selectedId && item.leaveDate.startsWith(year)).sort((a, b) => b.leaveDate.localeCompare(a.leaveDate));
 
@@ -93,7 +95,7 @@ export function LeaveRegistry({ employees, requests, adjustments, year, onYearCh
     <Card>
       <SectionHeader title="Annual Leave Registry" description="Every active Employee Master record is shown, including employees with no leave requests." />
       {feedback && <div className="mt-4"><AlertMessage tone={feedback.type} message={feedback.message} onDismiss={() => setFeedback(null)} /></div>}
-      <div className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]"><Input type="search" placeholder="Search employee" value={search} onChange={(event) => setSearch(event.target.value)} /><Select aria-label="Leave year" value={year} onChange={(event) => { onYearChange(event.target.value); setSelectedId(null); setEditingId(""); }}>{years.map((item) => <option key={item}>{item}</option>)}</Select></div>
+      <div className="mt-5 grid items-start gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">{hrScope === "ITC" ? <EmployeeFilterCombobox employees={employees} selectedEmployeeId={filterEmployeeId} onChange={setFilterEmployeeId} /> : <Input type="search" placeholder="Search employee" value={search} onChange={(event) => setSearch(event.target.value)} />}<Select label={hrScope === "ITC" ? "Year" : undefined} aria-label="Leave year" value={year} onChange={(event) => { onYearChange(event.target.value); setSelectedId(null); setEditingId(""); }}>{years.map((item) => <option key={item}>{item}</option>)}</Select></div>
       {canEditAdjustments && <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-sm font-semibold text-slate-900">Edit Remaining Leave</p><p className="mt-1 text-xs text-slate-500">Set the employee's current remaining leave for the selected calendar year. Future approved leave deducts normally.</p><div className="mt-4 space-y-4"><Select label="Employee Name" value={editingId} onChange={(event) => event.target.value ? beginEdit(event.target.value) : setEditingId("")}><option value="">Select employee</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}</Select><div><p className="mb-2 text-sm font-medium text-slate-700">Remaining Leave</p><div className="grid gap-3 sm:grid-cols-3"><Input label="Days" type="number" min="0" max="5" value={draft.days} disabled={!editingId} onChange={(event) => setDraft({ ...draft, days: event.target.value })} placeholder="0" /><Input label="Hours" type="number" min="0" max="7" value={draft.hours} disabled={!editingId} onChange={(event) => setDraft({ ...draft, hours: event.target.value })} placeholder="0" /><Input label="Minutes" type="number" min="0" max="59" value={draft.minutes} disabled={!editingId} onChange={(event) => setDraft({ ...draft, minutes: event.target.value })} placeholder="0" /></div></div><Button disabled={!editingId || busy} leftIcon={<Save className="h-4 w-4" />} onClick={() => void save()}>Save Remaining Leave</Button></div></div>}
       <div className="mt-5 overflow-x-auto"><table className="min-w-[860px] w-full text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-3">Employee</th><th className="px-3 py-3">Employer</th><th className="px-3 py-3">Annual Entitlement</th><th className="px-3 py-3">Approved Leave</th><th className="px-3 py-3">Pending Leave</th>{showRejectedRequests && <th className="px-3 py-3">Rejected Requests</th>}<th className="px-3 py-3">Remaining Leave</th><th className="px-3 py-3">View History</th></tr></thead><tbody>{visibleEmployees.map((employee) => { const value = totals(employee.id); return <tr key={employee.id} className="border-b border-slate-100"><td className="px-3 py-4 font-medium text-slate-900"><div className="flex items-center gap-2"><EmployeeAvatar employeeId={employee.id} name={employee.fullName} profilePhotoPath={employee.profilePhotoPath} size="sm" /><span>{employee.fullName}</span></div></td><td className="px-3 py-4"><Badge tone="neutral">{employee.employer}</Badge></td><td className="px-3 py-4">{formatLeaveMinutes(ANNUAL_LEAVE_ENTITLEMENT_MINUTES)}</td><td className="px-3 py-4">{value.approved > 0 ? formatLeaveMinutes(value.approved) : ""}</td><td className="px-3 py-4">{value.pending > 0 ? formatLeaveMinutes(value.pending) : ""}</td>{showRejectedRequests && <td className="px-3 py-4">{rejectedRequests(employee.id) || ""}</td>}<td className="px-3 py-4 font-semibold text-slate-900">{formatLeaveMinutes(value.remaining)}</td><td className="px-3 py-4"><Button size="sm" variant="secondary" leftIcon={<Eye className="h-3.5 w-3.5" />} onClick={() => setSelectedId(employee.id)}>View History</Button></td></tr>; })}</tbody></table>{visibleEmployees.length === 0 && <EmptyState title="No active employees found" description="Adjust the search or add an active employee in Employee Master." bordered={false} />}</div>
     </Card>

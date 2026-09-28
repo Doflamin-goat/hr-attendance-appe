@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
+import { EmployeeFilterCombobox } from "../components/employees/EmployeeFilterCombobox";
 import { useAuth } from "../context/AuthContext";
 import { UserX, Plus, Trash2, Search, Pencil, SlidersHorizontal } from "lucide-react";
 import { loadCrossWorkspaceAbsences } from "../services/attendanceService";
@@ -91,10 +92,12 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
   const [selectedYear, setSelectedYear] = useState<string>("all");
   const [selectedEmployee, setSelectedEmployee] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [itcEmployeeId, setItcEmployeeId] = useState("");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
   const [recordType, setRecordType] = useState<"system_generated" | "manual">("manual");
   const yearOptions = useMemo(() => Array.from(new Set(sourceAbsences.map((record) => String(getSafeDate(record.date).getFullYear())))).sort((a, b) => b.localeCompare(a)), [sourceAbsences]);
   const employeeOptions = useMemo(() => Array.from(new Set(sourceAbsences.map((record) => record.name))).sort((a, b) => a.localeCompare(b)), [sourceAbsences]);
+  const itcEmployee = activeEmployees.find((employee) => employee.id === itcEmployeeId);
 
   const filteredAbsences = useMemo(() => {
     const filtered = sourceAbsences.filter((record) => {
@@ -102,22 +105,27 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
       const scopeMonth = selectedDayScope !== "all" ? selectedMonthScope : selectedMonth;
       if (!matchesDateScope(record.date, scopeMonth, selectedDayScope)) return false;
       if (selectedYear !== "all" && String(getSafeDate(record.date).getFullYear()) !== selectedYear) return false;
+      if (hrScope === "ITC" && !readOnly) {
+        if (!itcEmployeeId) return true;
+        return record.employeeId === itcEmployeeId || (!record.employeeId && record.name.toLocaleLowerCase() === itcEmployee?.fullName.toLocaleLowerCase());
+      }
       if (selectedEmployee !== "all" && record.name !== selectedEmployee) return false;
       return record.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase());
     });
 
     return [...filtered].sort((a, b) => (sortOrder === "newest" ? 1 : -1) * (getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime()));
-  }, [sourceAbsences, selectedMonth, selectedYear, selectedEmployee, search, sortOrder, readOnly, recordType, selectedMonthScope, selectedDayScope]);
+  }, [sourceAbsences, selectedMonth, selectedYear, selectedEmployee, search, sortOrder, readOnly, recordType, selectedMonthScope, selectedDayScope, hrScope, itcEmployeeId, itcEmployee?.fullName]);
 
   const employeeSummary = useMemo(() => {
-    if (selectedEmployee === "all") return null;
-    const rows = sourceAbsences.filter((record) => record.name === selectedEmployee);
+    const summaryName = hrScope === "ITC" && !readOnly ? itcEmployee?.fullName : selectedEmployee === "all" ? undefined : selectedEmployee;
+    if (!summaryName) return null;
+    const rows = sourceAbsences.filter((record) => hrScope === "ITC" && !readOnly ? record.employeeId === itcEmployeeId || (!record.employeeId && record.name.toLocaleLowerCase() === summaryName.toLocaleLowerCase()) : record.name === summaryName);
     const now = new Date();
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     const reasons = new Map<string, number>();
     rows.forEach((record) => reasons.set(record.reason, (reasons.get(record.reason) ?? 0) + 1));
     return { month: rows.filter((record) => getMonthKey(record.date) === monthKey).length, year: rows.filter((record) => getSafeDate(record.date).getFullYear() === now.getFullYear()).length, commonReason: [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Not available" };
-  }, [sourceAbsences, selectedEmployee]);
+  }, [sourceAbsences, selectedEmployee, hrScope, readOnly, itcEmployee, itcEmployeeId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,18 +296,18 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
                 </div>
               </div>
 
-              <div>
+              {hrScope === "ITC" && !readOnly ? <EmployeeFilterCombobox employees={activeEmployees} selectedEmployeeId={itcEmployeeId} onChange={setItcEmployeeId} /> : <div>
                 <label className="mb-1.5 block text-sm font-semibold text-slate-700">Search Employee</label>
                 <Input type="search" placeholder="Search employee" value={search} onChange={(event) => setSearch(event.target.value)} leftIcon={<Search className="h-4 w-4" />} />
-              </div>
+              </div>}
 
               <div className="border-t border-slate-200 pt-4">
                 <h3 className="mb-3 text-sm font-semibold text-slate-800">Filters</h3>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <div>
+                  {!(hrScope === "ITC" && !readOnly) && <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Employee Type</label>
                     <Select value={selectedEmployee} onChange={(event) => setSelectedEmployee(event.target.value)}><option value="all">All Employees</option>{employeeOptions.map((employee) => <option key={employee} value={employee}>{employee}</option>)}</Select>
-                  </div>
+                  </div>}
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Year</label>
                     <Select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">All Years</option>{yearOptions.map((item) => <option key={item}>{item}</option>)}</Select>

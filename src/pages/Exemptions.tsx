@@ -9,6 +9,7 @@ import {
 import { useAttendance, type Exemption, type LateRecord } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
+import { EmployeeFilterCombobox } from "../components/employees/EmployeeFilterCombobox";
 import { useAuth } from "../context/AuthContext";
 import { loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption } from "../services/attendanceService";
 import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
@@ -89,6 +90,7 @@ export function Exemptions() {
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [historySearch, setHistorySearch] = useState("");
+  const [historyEmployeeId, setHistoryEmployeeId] = useState("");
   const [historyYear, setHistoryYear] = useState("all");
   const [historyMonth, setHistoryMonth] = useState("all");
   const [historyStatus, setHistoryStatus] = useState<"all" | "pending" | "approved" | "declined">("all");
@@ -105,12 +107,13 @@ export function Exemptions() {
   const historyYears = useMemo(() => [...new Set(exemptions.map((record) => String(getSafeDate(record.date).getFullYear())))].sort((a, b) => b.localeCompare(a)), [exemptions]);
 
   const filteredExemptions = useMemo(() => filterExemptionHistory(exemptions, {
-    search: historySearch,
+    search: hrScope === "ITC" ? "" : historySearch,
+    employeeId: hrScope === "ITC" ? historyEmployeeId : undefined,
     year: historyYear,
     month: historyMonth,
     status: historyStatus,
     sort: historySort,
-  }), [exemptions, historySearch, historyYear, historyMonth, historyStatus, historySort]);
+  }), [exemptions, hrScope, historyEmployeeId, historySearch, historyYear, historyMonth, historyStatus, historySort]);
   const exemptionSummary = useMemo(() => ({
     total: filteredExemptions.length,
     approved: filteredExemptions.filter((record) => record.approvalStatus === "approved").length,
@@ -249,7 +252,7 @@ export function Exemptions() {
             <Card>
               <SectionHeader icon={<CalendarDays className="w-5 h-5" />} iconTone="neutral" title="Search & Filters" description="Review exemption history by employee, date, status, and order." />
               <div className="mt-4 space-y-3">
-                <Input label="Search Employee" type="search" placeholder="Search employee" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />
+                {hrScope === "ITC" ? <EmployeeFilterCombobox employees={activeEmployees} selectedEmployeeId={historyEmployeeId} onChange={setHistoryEmployeeId} /> : <Input label="Search Employee" type="search" placeholder="Search employee" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />}
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <Select label="Year" value={historyYear} onChange={(event) => setHistoryYear(event.target.value)}><option value="all">All Years</option>{historyYears.map((item) => <option key={item}>{item}</option>)}</Select>
                   <Select label="Month" value={historyMonth} onChange={(event) => setHistoryMonth(event.target.value)}><option value="all">All Months</option>{Array.from({ length: 12 }, (_, index) => { const value = String(index + 1).padStart(2, "0"); return <option key={value} value={value}>{new Date(2000, index, 1).toLocaleDateString("en-US", { month: "long" })}</option>; })}</Select>
