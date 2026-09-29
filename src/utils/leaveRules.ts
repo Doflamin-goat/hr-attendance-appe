@@ -62,6 +62,10 @@ export function formatLeaveMinutes(totalMinutes: number) {
   return parts.join(" ") || "0 minutes";
 }
 
+export function formatRemainingLeaveMinutes(totalMinutes: number) {
+  return totalMinutes === 0 ? "No leave remaining" : formatLeaveMinutes(totalMinutes);
+}
+
 export function formatLeaveRequestDuration(date: string, startTime: string, endTime: string, durationMinutes: number) {
   const day = new Date(`${date}T00:00:00`).getDay();
   if (day === 6 && startTime.slice(0, 5) === "07:00" && endTime.slice(0, 5) === "15:15" && durationMinutes === 495) return "1 day";
@@ -92,6 +96,10 @@ export function leaveYear(date: string) {
 
 export function leaveBalance(adjustmentMinutes: number, approvedMinutes: number) {
   return Math.max(0, ANNUAL_LEAVE_ENTITLEMENT_MINUTES + adjustmentMinutes - approvedMinutes);
+}
+
+export function requestableLeaveBalance(adjustmentMinutes: number, approvedMinutes: number, pendingMinutes: number) {
+  return Math.max(0, ANNUAL_LEAVE_ENTITLEMENT_MINUTES + adjustmentMinutes - approvedMinutes - pendingMinutes);
 }
 
 export function adjustmentPartsToMinutes(days: number, hours: number, minutes: number) {

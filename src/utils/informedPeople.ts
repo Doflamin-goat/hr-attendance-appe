@@ -11,7 +11,7 @@ const MAIN_INFORMED_PEOPLE = [
 
 const ITC_INFORMED_PEOPLE = ["Sir Gatch", "Ma’am Chona", "HR Louissa"] as const;
 
-export function informedPeopleForScope(scope: HrScope | null) {
+export function informedPeopleForScope(scope: HrScope | null): string[] {
   return scope === "MAIN" ? [...MAIN_INFORMED_PEOPLE] : [...ITC_INFORMED_PEOPLE];
 }
 

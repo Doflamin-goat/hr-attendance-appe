@@ -34,6 +34,7 @@ import {
   saveManualUndertimeRecord,
   saveMemoReads,
   saveUploadedAttendanceFile,
+  updateGeneratedUndertimeDetails,
   type DeletedAttendanceData,
   type DeletedManualHrType,
   loadMainDailyAttendance,
@@ -104,6 +105,8 @@ export interface GeneratedUndertime {
   sourceFileId: string;
   sourceFileName: string;
   minutesUndertime?: number;
+  reason?: string;
+  informed?: string[];
 }
 
 export interface GeneratedHalfDay {
@@ -241,6 +244,7 @@ interface AttendanceState {
   updateMainSystemGeneratedAbsence: (id: string, reason: string, informed: string[]) => Promise<{ success: boolean; message: string }>;
   deleteMainSystemGeneratedAbsence: (id: string) => Promise<{ success: boolean; message: string }>;
   deleteManualUndertime: (id: string) => Promise<{ success: boolean; message: string }>;
+  updateGeneratedUndertimeDetails: (id: string, reason: string, informed: string[]) => Promise<{ success: boolean; message: string }>;
 
   // Manual late records (migration 005)
   manualLateRecords: ManualLateRecord[];
@@ -1196,6 +1200,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
     catch (error) { console.error("Failed to move manual undertime to Trash:", error); return { success: false, message: "The manual undertime could not be moved to Trash." }; }
   };
 
+  const editGeneratedUndertimeDetails = async (id: string, reason: string, informed: string[]) => {
+    if (!reason.trim()) return { success: false, message: "Reason / Remarks is required." };
+    try {
+      await updateGeneratedUndertimeDetails(id, reason, informed);
+      await applyDatabaseData(false);
+      return { success: true, message: "System generated undertime details updated." };
+    } catch (error) {
+      return { success: false, message: describeSupabaseError(error) };
+    }
+  };
+
   // ------------------- Manual late records (migration 005) --------------
 
   const addManualLate = async (input: {
@@ -1885,6 +1900,8 @@ const getTeam = (name: string) => {
         toExcelCalendarDate(item.date),
         item.timeIn,
         item.sourceFileName,
+        item.reason ?? "",
+        item.informed?.join(", ") ?? "",
       ]);
 
     const manualUndertimeRows = (items: UndertimeRecord[]) =>
@@ -2024,9 +2041,9 @@ const getTeam = (name: string) => {
       absenceSheet,
       7,
       6,
-      9,
+      11,
       "SYSTEM UNDERTIME BY HR",
-      ["Employee", "Date", "Time In", "Source File"],
+      ["Employee", "Date", "Time In", "Source File", "Reason / Remarks", "Informed"],
       [
         {
           label: secondaryEmployer,
@@ -2160,6 +2177,7 @@ const getTeam = (name: string) => {
         updateMainSystemGeneratedAbsence: updateMainGeneratedAbsence,
         deleteMainSystemGeneratedAbsence: deleteMainGeneratedAbsence,
         deleteManualUndertime,
+        updateGeneratedUndertimeDetails: editGeneratedUndertimeDetails,
 
         manualLateRecords: manualLateRecordsState,
         addManualLate,

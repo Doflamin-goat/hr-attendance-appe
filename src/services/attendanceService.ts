@@ -334,6 +334,8 @@ export async function loadAttendanceData(workspace: Workspace) {
       sourceFileId,
       sourceFileName: record.source_file_name ?? "",
       minutesUndertime: record.minutes_undertime ?? undefined,
+      reason: record.reason ?? undefined,
+      informed: normalizeTextList(record.informed_to),
     };
 
     const file = fileMap.get(sourceFileId);
@@ -895,6 +897,16 @@ export async function saveManualUndertimeRecord(
 
   if (error) throw error;
   return { ...undertime, id: rowId(data) };
+}
+
+export async function updateGeneratedUndertimeDetails(id: string, reason: string, informed: string[]) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("update_generated_undertime_details", {
+    p_id: id,
+    p_reason: reason.trim(),
+    p_informed: informed,
+  });
+  if (error) throw error;
 }
 
 export async function deleteExemptionRecord(

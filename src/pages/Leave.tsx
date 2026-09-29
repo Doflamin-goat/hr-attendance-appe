@@ -5,7 +5,7 @@ import { AlertMessage, Button, Card, Input, PageHeader, SearchableCombobox, Sect
 import { useEmployees } from "../context/EmployeesContext";
 import { useAuth } from "../context/AuthContext";
 import { listEmployeeLeaveAdjustments, listLeaveRequests, submitLeaveRequest, type EmployeeLeaveAdjustment, type LeaveRequest } from "../services/leaveService";
-import { calculateLeaveDuration, formatLeaveRequestDuration } from "../utils/leaveRules";
+import { calculateLeaveDuration, formatLeaveRequestDuration, formatRemainingLeaveMinutes, requestableLeaveBalance } from "../utils/leaveRules";
 import { informedPeopleForScope } from "../utils/informedPeople";
 
 export function Leave() {
@@ -38,6 +38,14 @@ export function Leave() {
     if (requests.some((item) => item.employeeId === form.employeeId && item.leaveDate === form.date && (item.status === "pending" || item.status === "approved"))) {
       setFeedback({ type: "error", message: "An active leave request already exists for this employee on this date." }); return;
     }
+    const requestYear = Number(form.date.slice(0, 4));
+    const employeeRequests = requests.filter((item) => item.employeeId === form.employeeId && item.leaveDate.startsWith(String(requestYear)));
+    const adjustment = adjustments.find((item) => item.employeeId === form.employeeId && item.leaveYear === requestYear)?.adjustmentMinutes ?? 0;
+    const approved = employeeRequests.filter((item) => item.status === "approved").reduce((sum, item) => sum + item.durationMinutes, 0);
+    const pending = employeeRequests.filter((item) => item.status === "pending").reduce((sum, item) => sum + item.durationMinutes, 0);
+    const available = requestableLeaveBalance(adjustment, approved, pending);
+    if (available <= 0) { setFeedback({ type: "error", message: "No leave balance remaining for this employee." }); return; }
+    if (duration.minutes > available) { setFeedback({ type: "error", message: `Requested leave exceeds the available balance of ${formatRemainingLeaveMinutes(available)}.` }); return; }
     try {
       await submitLeaveRequest({ employeeId: form.employeeId, leaveDate: form.date, startTime: form.start, endTime: form.end, durationMinutes: duration.minutes, informedParties: form.informed, reason: form.reason.trim() });
       await refresh();

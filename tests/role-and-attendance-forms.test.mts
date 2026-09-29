@@ -6,10 +6,75 @@ import { canAccessPath } from "../src/utils/access.ts";
 import { activeEmployeeOptions, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../src/utils/attendanceForms.ts";
 import { LOGIN_ACCOUNTS } from "../src/utils/loginAccounts.ts";
 import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../src/utils/exemptionForms.ts";
-import { adjustmentPartsToMinutes, ANNUAL_LEAVE_ENTITLEMENT_MINUTES, calculateAnnualLeaveTotals, calculateLeaveDuration, countRejectedLeaveRequests, formatLeaveDate, formatLeaveMinutes, formatLeaveRequestDuration, formatLeaveStatus, formatLeaveTime, leaveBalance, remainingLeaveAdjustment } from "../src/utils/leaveRules.ts";
+import { adjustmentPartsToMinutes, ANNUAL_LEAVE_ENTITLEMENT_MINUTES, calculateAnnualLeaveTotals, calculateLeaveDuration, countRejectedLeaveRequests, formatLeaveDate, formatLeaveMinutes, formatRemainingLeaveMinutes, formatLeaveRequestDuration, formatLeaveStatus, formatLeaveTime, leaveBalance, remainingLeaveAdjustment, requestableLeaveBalance } from "../src/utils/leaveRules.ts";
 import { activeMainAttendanceRecordIds, aggregateMainAttendance, checkoutUndertimeMinutes, isItcAttendanceRows, isMainAttendanceHeader, isValidFinalCheckout, mainWorkDateOptions, normalizeMainName, resolveManualCheckout, systemAbsenceEmployeeIds, validateAttendanceFormat } from "../src/utils/mainAttendance.ts";
 import { informedPeopleForScope } from "../src/utils/informedPeople.ts";
 import { attendanceDateValue, attendanceTimeValue, computeExcelColumnWidth, sortAttendanceDetailRecords, toExcelCalendarDate } from "../src/utils/exportRows.ts";
+
+test("remaining leave display describes zero without changing other duration labels", () => {
+  for (const [minutes, expected] of [
+    [0, "No leave remaining"], [480, "1 day"], [2400, "5 days"],
+    [240, "4 hours"], [30, "30 minutes"], [270, "4 hours 30 minutes"],
+    [750, "1 day 4 hours 30 minutes"], [1021, "2 days 1 hour 1 minute"],
+  ] as const) {
+    assert.equal(formatRemainingLeaveMinutes(minutes), expected);
+  }
+  assert.equal(formatLeaveMinutes(0), "0 minutes", "generic usage/duration formatter is unchanged");
+});
+
+test("remaining leave presentation preserves entitlement, approved/pending totals and adjustments", () => {
+  const records = [
+    { leaveDate: "2026-09-21", status: "approved" as const, durationMinutes: 2400 },
+    { leaveDate: "2026-09-22", status: "pending" as const, durationMinutes: 120 },
+    { leaveDate: "2026-09-23", status: "rejected" as const, durationMinutes: 60 },
+    { leaveDate: "2025-09-21", status: "approved" as const, durationMinutes: 480 },
+  ];
+  const totals = calculateAnnualLeaveTotals(records, 2026, 0);
+  assert.deepEqual(totals, { adjustment: 0, approved: 2400, pending: 120, remaining: 0 });
+  assert.equal(formatRemainingLeaveMinutes(totals.remaining), "No leave remaining");
+  assert.deepEqual(calculateAnnualLeaveTotals(records, 2026, 270), {
+    adjustment: 270, approved: 2400, pending: 120, remaining: 270,
+  });
+  assert.equal(ANNUAL_LEAVE_ENTITLEMENT_MINUTES, 2400);
+  assert.equal(calculateLeaveDuration("2026-09-26", "07:00", "15:15").minutes, 495);
+  assert.equal(leaveBalance(0, 2500), 0);
+  assert.equal(remainingLeaveAdjustment(270, 2400), 270);
+  assert.equal(requestableLeaveBalance(0, 2400, 0), 0);
+  assert.equal(requestableLeaveBalance(0, 0, 480), 1920);
+  assert.equal(requestableLeaveBalance(0, 2400, 480), 0);
+});
+
+test("ITC leave submission reserves pending minutes without changing approved arithmetic", () => {
+  const page = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/039_itc_leave_balance_and_undertime_details.sql", import.meta.url), "utf8");
+  assert.match(page, /requestableLeaveBalance\(adjustment, approved, pending\)/);
+  assert.match(page, /No leave balance remaining for this employee/);
+  assert.match(page, /Requested leave exceeds the available balance/);
+  assert.match(migration, /status='pending'[\s\S]*?pending_minutes/);
+  assert.match(migration, /available=2400\+coalesce\(adjustment,0\)-approved_minutes-pending_minutes/);
+  assert.match(migration, /if available<=0 then raise exception 'No leave balance remaining/);
+  assert.match(migration, /if p_duration_minutes>available then raise exception/);
+  assert.doesNotMatch(migration, /update public\.employee_leave_adjustments/);
+});
+
+test("generated undertime details edit preserves generated identity and immutable fields", () => {
+  const page = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/039_itc_leave_balance_and_undertime_details.sql", import.meta.url), "utf8");
+  assert.match(page, /Edit Details/);
+  assert.match(page, /Reason \/ Remarks/);
+  assert.match(page, /Informed person/);
+  assert.match(service, /update_generated_undertime_details/);
+  assert.match(migration, /add column if not exists reason text/);
+  assert.match(migration, /add column if not exists informed_to text\[\]/);
+  assert.match(migration, /update public\.generated_undertimes set reason=nullif/);
+  assert.doesNotMatch(migration, /set employee_id=|set work_date=|set time_in=|set minutes_undertime=|set source_file_id=/);
+  assert.match(migration, /where id=u\.id/);
+  assert.match(migration, /not is_deleted for update/);
+  assert.match(migration, /attendance_hr_scope\(\)<>'ITC'/);
+  assert.match(page, /hrScope === "ITC" && <Button/);
+  assert.match(readFileSync(new URL("../supabase/migrations/037_undertime_identity_and_precedence.sql", import.meta.url), "utf8"), /generated_undertimes_one_active_employee_date/);
+});
 
 const mainHeader = ["Department", "Name", "No.", "Date/Time", "Status", "Location ID", "ID Number", "VerifyCode", "CardNo"];
 const mainEmployees = [
@@ -901,7 +966,7 @@ test("approval errors are mapped to safe user-readable categories", () => {
 test("workflow recipients include both Admin workspaces and the submitting HR on review", () => {
   const recipients = (event: "submitted" | "approved" | "declined", submitter: string, admins: { id: string; workspace: string }[]) => event === "submitted" ? admins.map((item) => item.id) : [submitter];
   assert.deepEqual(recipients("submitted", "hr-app", [{ id: "admin-app", workspace: "APP" }, { id: "admin-wais", workspace: "WAIS" }]), ["admin-app", "admin-wais"]);
-  assert.deepEqual(recipients("approved", "hr-app", [], "APP"), ["hr-app"]);
+  assert.deepEqual(recipients("approved", "hr-app", []), ["hr-app"]);
 });
 
 test("staging workflow uses bigint late and exemption references", () => {

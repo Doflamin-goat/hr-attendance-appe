@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useAttendance } from "../context/AttendanceContext";
+import { useAttendance, type GeneratedUndertime } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { useAuth } from "../context/AuthContext";
@@ -13,6 +13,7 @@ import {
   Timer,
   RotateCcw,
   Trash2,
+  Pencil,
 } from "lucide-react";
 import {
   PageHeader,
@@ -57,6 +58,7 @@ export function Undertime() {
     deleteManualUndertimesByMonth,
     removeManualUndertimeAdjustment,
     deleteManualUndertime,
+    updateGeneratedUndertimeDetails,
   } = useAttendance();
   const { activeEmployees } = useEmployees();
   const { hrScope } = useAuth();
@@ -76,6 +78,9 @@ export function Undertime() {
   const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  const [editTarget, setEditTarget] = useState<GeneratedUndertime | null>(null);
+  const [editReason, setEditReason] = useState("");
+  const [editInformed, setEditInformed] = useState<string[]>([]);
   const matchingLateRecords = useMemo(() => allLateRecords.filter((record) => {
     const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
     const recordDate = record.workDate ?? new Date(record.date).toLocaleDateString("en-CA");
@@ -199,6 +204,20 @@ export function Undertime() {
     toast.success("Record moved to Trash.");
   };
 
+  const openGeneratedEdit = (record: GeneratedUndertime) => {
+    setEditTarget(record);
+    setEditReason(record.reason ?? "");
+    setEditInformed(record.informed ?? []);
+    setFeedback(null);
+  };
+
+  const saveGeneratedEdit = async () => {
+    if (!editTarget) return;
+    const result = await updateGeneratedUndertimeDetails(editTarget.id, editReason, editInformed);
+    setFeedback({ type: result.success ? "success" : "error", message: result.message });
+    if (result.success) setEditTarget(null);
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -277,6 +296,10 @@ export function Undertime() {
                     <p className="text-xs text-slate-500 mt-0.5">
                       Source: {record.sourceFileName}
                     </p>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0 text-xs text-slate-600"><p>{record.reason || "No remarks recorded."}</p>{record.informed?.length ? <p className="mt-1">Informed: {record.informed.join(", ")}</p> : null}</div>
+                      {hrScope === "ITC" && <Button size="sm" variant="secondary" leftIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openGeneratedEdit(record)}>Edit Details</Button>}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -474,6 +497,16 @@ export function Undertime() {
         onConfirm={handleDeleteMonth}
         onCancel={() => setConfirmDeleteMonth(false)}
       />
+
+      {editTarget && <Card className="fixed inset-x-4 top-20 z-40 mx-auto max-w-lg shadow-xl">
+        <SectionHeader title="Edit System Generated Details" description="Only remarks and informed people can be changed. Attendance data remains system-controlled." />
+        <div className="mt-4 space-y-4">
+          <Textarea label="Reason / Remarks" required value={editReason} onChange={(event) => setEditReason(event.target.value)} rows={3} />
+          <SearchableCombobox label="Informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !editInformed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setEditInformed([...editInformed, person.label])} onCreateCustom={(person) => setEditInformed([...editInformed, person])} />
+          <div className="flex flex-wrap gap-2">{editInformed.map((person) => <button type="button" key={person} onClick={() => setEditInformed(editInformed.filter((item) => item !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700">{person} ×</button>)}</div>
+          <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setEditTarget(null)}>Cancel</Button><Button onClick={() => void saveGeneratedEdit()}>Save Details</Button></div>
+        </div>
+      </Card>}
 
       <ConfirmModal
         open={!!restoreTarget}
