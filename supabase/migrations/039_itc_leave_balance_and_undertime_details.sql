@@ -40,7 +40,7 @@ begin
   end if;
   insert into public.leave_requests(workspace,employee_id,employee_name,leave_date,start_time,end_time,duration_minutes,informed_parties,reason,status,submitted_by)
   values(public.attendance_workspace(),e.id,e.full_name,p_leave_date,p_start_time,p_end_time,p_duration_minutes,coalesce(p_informed,'{}'),btrim(p_reason),'pending',auth.uid()) returning id into new_id;
-  return new_id;
+  return new_id; 
 end $$;
 
 create or replace function public.update_generated_undertime_details(p_id text,p_reason text,p_informed text[] default '{}')
@@ -51,7 +51,7 @@ begin
   select * into u from public.generated_undertimes where id::text=p_id and workspace=public.attendance_workspace() and not is_deleted for update;
   if u.id is null then raise exception 'Active generated undertime in your HR scope required'; end if;
   update public.generated_undertimes set reason=nullif(btrim(p_reason),''), informed_to=coalesce(p_informed,'{}') where id=u.id;
-end $$;
+end $$;  
 
 revoke all on function public.submit_leave_request(uuid,date,time,time,integer,text[],text), public.update_generated_undertime_details(text,text,text[]) from public,anon;
 grant execute on function public.submit_leave_request(uuid,date,time,time,integer,text[],text), public.update_generated_undertime_details(text,text,text[]) to authenticated;
