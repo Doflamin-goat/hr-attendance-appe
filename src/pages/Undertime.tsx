@@ -347,7 +347,7 @@ export function Undertime() {
                   const range = hrScope === "MAIN" && "lastOut" in record && record.lastOut
                     ? { from: record.lastOut.slice(0, 5), to: new Date(`${date}T00:00:00`).getDay() === 6 ? "15:15" : "17:00", minutes: checkoutUndertimeMinutes(date, record.lastOut) }
                     : "timeIn" in record ? attendanceRecordRange(date, record.timeIn) : null;
-                  return range ? <option key={record.id} value={record.id}>{formatTime12Hour(range.from)} – {formatTime12Hour(range.to)} · {formatDuration(range.minutes)}</option> : null;
+                  return range ? <option key={record.id} value={record.id}>{formatTime12Hour(range.from)} â€“ {formatTime12Hour(range.to)} Â· {formatDuration(range.minutes)}</option> : null;
                 })}
               </Select>
 
@@ -355,7 +355,7 @@ export function Undertime() {
                 <p className="text-sm font-medium text-slate-700 mb-1.5">Undertime Duration</p>
                 <p className="text-sm text-slate-600">
                   {selectedAttendanceRange
-                    ? <><span className="font-semibold text-slate-900">{formatDuration(selectedAttendanceRange.minutes)}</span> ({formatTime12Hour(selectedAttendanceRange.from)} â€“ {formatTime12Hour(selectedAttendanceRange.to)})</>
+                    ? <><span className="font-semibold text-slate-900">{formatDuration(selectedAttendanceRange.minutes)}</span> ({formatTime12Hour(selectedAttendanceRange.from)} Ã¢â‚¬â€œ {formatTime12Hour(selectedAttendanceRange.to)})</>
                     : "Select an attendance record with a valid checkout first."}
                 </p>
                 {employeeId && date && matchingAttendanceRecords.length === 0 && (
@@ -372,7 +372,7 @@ export function Undertime() {
               />
 
               <div>
-                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} Ã—</button>)}</div></div>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} Ãƒâ€”</button>)}</div></div>
               </div>
 
               <Button
@@ -443,9 +443,10 @@ export function Undertime() {
                     >
                       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0 flex-1">
-                          <p className="text-[15px] font-semibold text-slate-900">
-                            {record.name}
-                          </p>
+                           <div className="flex items-center gap-2">
+                             <EmployeeAvatar employeeId={record.employeeId} name={record.name} profilePhotoPath={activeEmployees.find((employee) => employee.id === record.employeeId)?.profilePhotoPath} size="sm" />
+                             <p className="text-[15px] font-semibold text-slate-900">{record.name}</p>
+                           </div>
                           <p className="mt-1 text-xs text-slate-500">
                             {record.date}
                           </p>
@@ -515,7 +516,7 @@ export function Undertime() {
         <div className="mt-4 space-y-4">
           <Textarea label="Reason / Remarks" required value={editReason} onChange={(event) => setEditReason(event.target.value)} rows={3} />
           <SearchableCombobox label="Informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !editInformed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setEditInformed([...editInformed, person.label])} onCreateCustom={(person) => setEditInformed([...editInformed, person])} />
-          <div className="flex flex-wrap gap-2">{editInformed.map((person) => <button type="button" key={person} onClick={() => setEditInformed(editInformed.filter((item) => item !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700">{person} ×</button>)}</div>
+          <div className="flex flex-wrap gap-2">{editInformed.map((person) => <button type="button" key={person} onClick={() => setEditInformed(editInformed.filter((item) => item !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700">{person} Ã—</button>)}</div>
           <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setEditTarget(null)}>Cancel</Button><Button onClick={() => void saveGeneratedEdit()}>Save Details</Button></div>
         </div>
       </Card>}
