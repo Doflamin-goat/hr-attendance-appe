@@ -11,7 +11,7 @@ import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { EmployeeFilterCombobox } from "../components/employees/EmployeeFilterCombobox";
 import { useAuth } from "../context/AuthContext";
-import { loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption } from "../services/attendanceService";
+import { createDateExemptionRule, disableDateExemptionRule, listDateExemptionRules, loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption, type DateExemptionRule } from "../services/attendanceService";
 import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
 import {
@@ -53,7 +53,8 @@ type RestoreTarget = { id: string; name: string; date: string } | null;
 type DeleteTarget = { id: string; name: string; date: string } | null;
 
 export function Exemptions() {
-  const { workspace, hrScope } = useAuth();
+  const { workspace, hrScope, role } = useAuth();
+  const readOnly = role === "Admin";
   const {
     loading,
     exemptions,
@@ -82,6 +83,7 @@ export function Exemptions() {
     const load = async () => { await refreshWorkflowData(); };
     void load();
   }, [workspace]);
+  useEffect(() => { if (workspace) void listDateExemptionRules(workspace).then(setDateRules).catch(() => setDateRules([])); }, [workspace]);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -95,6 +97,8 @@ export function Exemptions() {
   const [historyMonth, setHistoryMonth] = useState("all");
   const [historyStatus, setHistoryStatus] = useState<"all" | "pending" | "approved" | "declined">("all");
   const [historySort, setHistorySort] = useState<"newest" | "oldest">("newest");
+  const [dateRule, setDateRule] = useState({ date: "", reason: "", note: "" });
+  const [dateRules, setDateRules] = useState<DateExemptionRule[]>([]);
 
   const monthOptions = useMemo(() => {
     const uniqueMonths = Array.from(
@@ -182,11 +186,22 @@ export function Exemptions() {
     <div className="space-y-6">
       <PageHeader
         title="Late Exemptions"
-        description="Submit a linked late exemption for Admin review. Pending requests leave the late counted."
+        description={readOnly ? "Review scoped exemption records and their approval status." : "Submit a linked late exemption for Admin review. Pending requests leave the late counted."}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1">
+      {!readOnly && <Card className="mx-auto w-full max-w-6xl">
+        <SectionHeader icon={<CalendarDays className="w-5 h-5" />} iconTone="brand" title="Date-based exemption rule" description="Late records on this date will be submitted as Pending exemptions in this workspace." />
+        <div className="mt-4 grid gap-3 md:grid-cols-[180px_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+          <Input label="Date" type="date" value={dateRule.date} onChange={(e) => setDateRule({ ...dateRule, date: e.target.value })} />
+          <Input label="Reason" value={dateRule.reason} onChange={(e) => setDateRule({ ...dateRule, reason: e.target.value })} />
+          <Input label="Note (optional)" value={dateRule.note} onChange={(e) => setDateRule({ ...dateRule, note: e.target.value })} />
+          <Button disabled={!dateRule.date || !dateRule.reason.trim()} onClick={async () => { try { await createDateExemptionRule(dateRule); setDateRule({ date: "", reason: "", note: "" }); if (workspace) setDateRules(await listDateExemptionRules(workspace)); await refreshWorkflowData(); setFeedback({ type: "success", message: "Date exemption rule created." }); } catch { setFeedback({ type: "error", message: "Date exemption rule could not be created." }); } }}>Create Rule</Button>
+        </div>
+        {dateRules.filter((rule) => rule.isActive).map((rule) => <div key={rule.id} className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"><span><strong>{new Date(`${rule.exemptionDate}T00:00:00`).toLocaleDateString("en-US")}</strong> — {rule.reason}</span><Button variant="secondary" size="sm" onClick={async () => { await disableDateExemptionRule(rule.id); if (workspace) setDateRules(await listDateExemptionRules(workspace)); }}>Disable</Button></div>)}
+      </Card>}
+
+      <div className={`mx-auto grid w-full max-w-6xl grid-cols-1 gap-6 ${readOnly ? "lg:grid-cols-1" : "lg:grid-cols-3"}`}>
+        {!readOnly && <div className="lg:col-span-1">
           <Card className="lg:sticky lg:top-24">
             <SectionHeader
               icon={<ShieldCheck className="w-5 h-5" />}
@@ -245,9 +260,9 @@ export function Exemptions() {
               </Button>
             </form>
           </Card>
-        </div>
+        </div>}
 
-        <div className="lg:col-span-2 space-y-4">
+        <div className={`${readOnly ? "lg:col-span-1" : "lg:col-span-2"} space-y-4`}>
           <>
             <Card>
               <SectionHeader icon={<CalendarDays className="w-5 h-5" />} iconTone="neutral" title="Search & Filters" description="Review exemption history by employee, date, status, and order." />
@@ -259,13 +274,13 @@ export function Exemptions() {
                   <Select label="Status" value={historyStatus} onChange={(event) => setHistoryStatus(event.target.value as typeof historyStatus)}><option value="all">All Statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="declined">Declined</option></Select>
                   <Select label="Sort By" value={historySort} onChange={(event) => setHistorySort(event.target.value as typeof historySort)}><option value="newest">Newest First</option><option value="oldest">Oldest First</option></Select>
                 </div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                {!readOnly && <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                   <Select label="Delete Month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} className="sm:w-52">
                     <option value="all">Select month</option>
                     {monthOptions.map((month) => <option key={month} value={month}>{formatMonthLabel(month)}</option>)}
                   </Select>
                   {selectedMonth !== "all" && <Button variant="danger" leftIcon={<Trash2 className="w-4 h-4" />} onClick={() => setConfirmDeleteMonth(true)}>Delete {formatMonthLabel(selectedMonth)}</Button>}
-                </div>
+                </div>}
               </div>
             </Card>
             <Card>
@@ -331,7 +346,7 @@ export function Exemptions() {
 
                             <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
                               <Badge tone={record.approvalStatus === "approved" ? "success" : record.approvalStatus === "declined" ? "danger" : "warning"}>{record.approvalStatus === "approved" ? "Approved" : record.approvalStatus === "declined" ? "Declined" : "Pending"}</Badge>
-                              {record.approvalStatus === "approved" && !record.lateRestoredAt && <Button
+                              {!readOnly && record.approvalStatus === "approved" && !record.lateRestoredAt && <Button
                                 variant="warning"
                                 size="sm"
                                 leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
@@ -345,7 +360,7 @@ export function Exemptions() {
                               >
                                 Restore Late Record
                               </Button>}
-                              <Button
+                              {!readOnly && <Button
                                 variant="danger"
                                 size="sm"
                                 leftIcon={<Trash2 className="w-3.5 h-3.5" />}
@@ -358,7 +373,7 @@ export function Exemptions() {
                                 }
                               >
                                 Delete
-                              </Button>
+                              </Button>}
                             </div>
                           </div>
 

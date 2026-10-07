@@ -30,10 +30,24 @@ export function AdminApprovals() {
     catch (error) { setFeedback({ type: "error", message: describeReviewExemptionError(error) }); }
     finally { setBusy(null); }
   };
+  const approveAll = async () => {
+    const eligible = pending.filter((item) => item.lateRecordId && Number.isSafeInteger(Number(item.id)));
+    if (eligible.length === 0) { setFeedback({ type: "error", message: "There are no eligible pending exemptions to approve." }); return; }
+    setBusy("all");
+    let succeeded = 0;
+    let failed = 0;
+    for (const item of eligible) {
+      try { await reviewStagedExemption(Number(item.id), "approved", remarks[item.id] ?? ""); succeeded += 1; } catch { failed += 1; }
+    }
+    await refreshAttendanceData();
+    await refreshApprovals();
+    setBusy(null);
+    setFeedback({ type: failed ? "error" : "success", message: `${succeeded} exemption${succeeded === 1 ? "" : "s"} approved${failed ? `; ${failed} failed and remain pending.` : "."}` });
+  };
   return <div className="space-y-6"><PageHeader title="Approvals" description={`Review exemption and leave requests for ${hrScope === "MAIN" ? "Main Office" : "ITC Plant"}.`} actions={<div className="inline-flex rounded-lg bg-slate-100 p-1"><button type="button" onClick={() => setActiveCategory("exemptions")} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeCategory === "exemptions" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>Exemptions</button><button type="button" onClick={() => setActiveCategory("leave")} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeCategory === "leave" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>Leave</button></div>} />
     {activeCategory === "leave" ? <AdminLeaveApprovals /> : <>
     {feedback && <AlertMessage tone={feedback.type} message={feedback.message} onDismiss={() => setFeedback(null)} />}
-    <Card><SectionHeader icon={<ClipboardCheck className="w-5 h-5" />} iconTone="brand" title="Pending exemptions" description="Approval changes the status of only the exact linked late record." />
+    <Card><div className="flex flex-wrap items-start justify-between gap-3"><SectionHeader icon={<ClipboardCheck className="w-5 h-5" />} iconTone="brand" title="Pending exemptions" description="Approval changes the status of only the exact linked late record." /><Button variant="success" size="sm" disabled={busy !== null || pending.length === 0} onClick={() => void approveAll()}>Approve All Pending</Button></div>
       {pending.length === 0 ? <EmptyState icon={<CheckCircle2 className="w-6 h-6" />} title="No pending exemptions" description="New HR exemption submissions will appear here." bordered={false} /> : <ul className="mt-5 space-y-3">{pending.map((item) => {
         const canReview = Boolean(item.lateRecordId);
         return <li key={item.id} className="rounded-xl border border-warning-200 bg-white p-4 shadow-sm ring-1 ring-warning-100/60 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><EmployeeAvatar name={item.name} size="sm" /><p className="truncate font-semibold text-slate-900">{item.name}</p></div><Badge tone="warning">Pending</Badge></div><div className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2"><p className="text-slate-500">Attendance date: {item.date}</p><p className="text-slate-700"><span className="font-medium text-slate-500">Linked late:</span> {item.lateTime || "Not recorded"} • {item.minutesLate ?? 0} minute(s)</p><p className="text-slate-700"><span className="font-medium text-slate-500">Reason:</span> {item.reason}</p><p className="text-slate-700"><span className="font-medium text-slate-500">Informed:</span> {item.informed?.join(", ") || "Not recorded"}</p></div>{!canReview && <div className="mt-4"><AlertMessage tone="warning" title="Linked late record required" message="This request was created before linked exemptions were introduced. It cannot be reviewed safely until a late record is explicitly linked by an authorized data correction." /></div>}<div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]"><Input aria-label={`Review remarks for ${item.name}`} placeholder="Review remarks (optional)" value={remarks[item.id] ?? ""} onChange={(event) => setRemarks({ ...remarks, [item.id]: event.target.value })} /><Button variant="success" disabled={!canReview || busy === item.id} onClick={() => void review(item.id, "approved")}>Approve</Button><Button variant="danger" disabled={!canReview || busy === item.id} onClick={() => void review(item.id, "declined")}>Decline</Button></div></li>;

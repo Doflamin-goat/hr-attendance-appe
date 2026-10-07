@@ -3,7 +3,7 @@ import { useAttendance, type GeneratedUndertime } from "../context/AttendanceCon
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { useAuth } from "../context/AuthContext";
-import { attendanceRecordRange, formatDuration, formatTime12Hour } from "../utils/attendanceForms";
+import { attendanceRecordRange, dateFilterDates, dateFilterMonths, dateFilterYears, formatDuration, formatTime12Hour, matchesDateFilters } from "../utils/attendanceForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
 import { checkoutUndertimeMinutes } from "../utils/mainAttendance";
 import {
@@ -71,6 +71,9 @@ export function Undertime() {
   const [reason, setReason] = useState("");
   const [sourceRecordId, setSourceRecordId] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("all");
+  const [systemYear, setSystemYear] = useState("all");
+  const [systemMonth, setSystemMonth] = useState("all");
+  const [systemDate, setSystemDate] = useState("all");
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -129,6 +132,12 @@ export function Undertime() {
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     );
   }, [manualUndertimes, selectedMonth]);
+
+  const systemDates = useMemo(() => generatedUndertimes.map((record) => record.date), [generatedUndertimes]);
+  const systemYears = useMemo(() => dateFilterYears(systemDates), [systemDates]);
+  const systemMonths = useMemo(() => dateFilterMonths(systemDates, systemYear), [systemDates, systemYear]);
+  const systemExactDates = useMemo(() => dateFilterDates(systemDates, systemYear, systemMonth), [systemDates, systemYear, systemMonth]);
+  const filteredGeneratedUndertimes = useMemo(() => generatedUndertimes.filter((record) => matchesDateFilters(record.date, systemYear, systemMonth, systemDate)).sort((a, b) => new Date(`${b.date} ${b.timeIn}`).getTime() - new Date(`${a.date} ${a.timeIn}`).getTime()), [generatedUndertimes, systemYear, systemMonth, systemDate]);
 
   const handleSave = async () => {
     if (!employeeId || !date || !sourceRecordId || !selectedAttendanceRange || !reason.trim()) {
@@ -269,10 +278,13 @@ export function Undertime() {
             description="Auto-detected from uploaded attendance files."
           />
 
+          <div className="mt-4 grid gap-3 sm:grid-cols-3"><Select label="Year" value={systemYear} onChange={(event) => { setSystemYear(event.target.value); setSystemMonth("all"); setSystemDate("all"); }}><option value="all">All Years</option>{systemYears.map((item) => <option key={item}>{item}</option>)}</Select><Select label="Month" value={systemMonth} onChange={(event) => { setSystemMonth(event.target.value); setSystemDate("all"); }}><option value="all">All Months</option>{systemMonths.map((item) => <option key={item} value={item}>{new Date(2000, Number(item) - 1, 1).toLocaleDateString("en-US", { month: "long" })}</option>)}</Select><Select label="Exact Date" value={systemDate} onChange={(event) => setSystemDate(event.target.value)}><option value="all">All Dates</option>{systemExactDates.map((item) => <option key={item} value={item}>{new Date(`${item}T00:00:00`).toLocaleDateString("en-US")}</option>)}</Select></div>
+          <p className="mt-3 text-xs font-medium text-slate-500">{filteredGeneratedUndertimes.length} record{filteredGeneratedUndertimes.length === 1 ? "" : "s"}</p>
+
           <div className="mt-5">
             {loading ? (
               <SkeletonTable rows={4} columns={3} />
-            ) : generatedUndertimes.length === 0 ? (
+            ) : filteredGeneratedUndertimes.length === 0 ? (
               <EmptyState
                 icon={<Timer className="w-6 h-6" />}
                 title="No undertime detected"
@@ -281,7 +293,7 @@ export function Undertime() {
               />
             ) : (
               <ul className="space-y-2">
-                {generatedUndertimes.map((record) => (
+                {filteredGeneratedUndertimes.map((record) => (
                   <li
                     key={record.id}
                     className="rounded-lg border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors"

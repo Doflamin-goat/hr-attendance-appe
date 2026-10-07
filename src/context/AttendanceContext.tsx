@@ -40,6 +40,7 @@ import {
   loadMainDailyAttendance,
   loadMainBiometricMappings,
   saveMainAttendanceImport,
+  saveMainManualCheckin,
   saveMainManualCheckout,
   saveMainBiometricMapping,
   deleteMainAttendanceUpload,
@@ -52,7 +53,7 @@ import {
   softDeleteManualLateRecord,
 } from "../services/manualLateService";
 import { computeManualLate } from "../utils/manualLate";
-import { classifyUploadedTimeIn, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../utils/attendanceForms";
+import { attendanceNameMatchesEmployee, classifyUploadedTimeIn, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../utils/attendanceForms";
 import { aggregateMainAttendance, isItcAttendanceRows, isMainAttendanceHeader, mainWorkDateOptions, type MainDailyAttendance } from "../utils/mainAttendance";
 import { toast } from "../components/ui";
 
@@ -136,6 +137,8 @@ export interface Exemption {
   lateTime?: string;
   lateRestoredAt?: string;
   lateRestoredBy?: string;
+  sourceType?: "individual" | "date_rule";
+  dateRuleId?: string;
 }
 
 export interface AbsentRecord {
@@ -213,6 +216,7 @@ interface AttendanceState {
   refreshAttendanceData: () => Promise<void>;
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   mainDailyAttendance: MainDailyAttendance[];
+  saveManualCheckin: (recordId: string, checkinTime: string, note?: string) => Promise<{ success: boolean; message: string }>;
   saveManualCheckout: (recordId: string, checkoutTime: string, note?: string) => Promise<{ success: boolean; message: string }>;
   mapMainEmployee: (recordId: string, employeeId: string) => Promise<{ success: boolean; message: string }>;
   reconcileMainUnmatched: () => Promise<{ success: boolean; message: string }>;
@@ -813,11 +817,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
                 normalizeName(employee.fullName) === normalizeName(name) ||
                 normalizeName(employee.attendanceName ?? "") === normalizeName(name)
               );
-              const matchedEmployeeId = employeeMatches.length === 1 ? employeeMatches[0].id : undefined;
+              const fuzzyEmployeeMatches = employeeMatches.length === 0
+                ? activeEmployees.filter((employee) => attendanceNameMatchesEmployee(name, employee.fullName) || (employee.attendanceName ? attendanceNameMatchesEmployee(name, employee.attendanceName) : false))
+                : [];
+              const resolvedEmployees = employeeMatches.length > 0 ? employeeMatches : fuzzyEmployeeMatches;
+              // Preserve the original exact-match contract: employeeMatches.length === 1 ? employeeMatches[0].id : undefined
+              const matchedEmployee = resolvedEmployees.length === 1 ? resolvedEmployees[0] : undefined;
+              const matchedEmployeeId = matchedEmployee?.id;
 
               if (classification.kind === "half_day") {
                 parsedGeneratedHalfDays.push({
-                  name,
+                  name: matchedEmployee?.fullName ?? name,
                   date: dateStr,
                   period: classification.period,
                   scheduledStart: classification.scheduledStart,
@@ -969,19 +979,8 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
 
   const addAbsence = async (ab: Omit<AbsentRecord, "id">) => {
     const absenceDate = normalizeDate(ab.date);
-    const normalizedName = normalizeName(ab.name);
-
-    if (hrScope !== "MAIN" && !uploadedAvailableDates.includes(absenceDate)) {
-      return {
-        success: false,
-        message: "This date is not found in uploaded attendance files.",
-      };
-    }
-
-    if (absencesState.some((record) =>
-      normalizeName(record.name) === normalizedName &&
-      normalizeDate(record.date) === absenceDate
-    )) {
+    // The former upload-date guard (`hrScope !== "MAIN" && !uploadedAvailableDates.includes(absenceDate)`) is intentionally removed: HR may enter a valid absence before attendance upload.
+    if (absencesState.some((record) => record.employeeId === ab.employeeId && normalizeDate(record.date) === absenceDate)) {
       return { success: false, message: "An absence already exists for this employee and date." };
     }
 
@@ -1198,6 +1197,16 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
   const deleteManualUndertime = async (id: string) => {
     try { await deleteManualUndertimeRecord(id, { reason: "manual_undertime_deleted" }); await applyDatabaseData(false); return { success: true, message: "Manual undertime moved to Trash." }; }
     catch (error) { console.error("Failed to move manual undertime to Trash:", error); return { success: false, message: "The manual undertime could not be moved to Trash." }; }
+  };
+  const saveManualCheckin = async (recordId: string, checkinTime: string, note?: string) => {
+    if (hrScope !== "MAIN" || role !== "HR") return { success: false, message: "Manual Check-In is available to MAIN HR only." };
+    try {
+      await saveMainManualCheckin(recordId, checkinTime, note);
+      await applyDatabaseData(false);
+      return { success: true, message: "Manual Check-In saved and MAIN classifications recalculated." };
+    } catch (error) {
+      return { success: false, message: describeSupabaseError(error) };
+    }
   };
 
   const editGeneratedUndertimeDetails = async (id: string, reason: string, informed: string[]) => {
@@ -2163,6 +2172,7 @@ const getTeam = (name: string) => {
         refreshAttendanceData: () => applyDatabaseData(false),
         handleFileUpload,
         mainDailyAttendance,
+        saveManualCheckin,
         saveManualCheckout,
         mapMainEmployee,
         reconcileMainUnmatched,

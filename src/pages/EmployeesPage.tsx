@@ -332,10 +332,12 @@ export default function EmployeesPage() {
     {
       key: "employee",
       header: "Employee",
+      className: "w-[22%] align-top",
+      headerClassName: "w-[22%]",
       render: (row) => (
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex min-w-0 items-start gap-3">
           <EmployeeAvatar employeeId={row.employee?.id} name={row.fullName} profilePhotoPath={row.employee?.profilePhotoPath} />
-          <p className="font-medium text-slate-900 truncate min-w-0">
+          <p className="min-w-0 break-words font-medium leading-snug text-slate-900" title={row.fullName}>
             {row.fullName}
           </p>
         </div>
@@ -344,13 +346,17 @@ export default function EmployeesPage() {
     {
       key: "company",
       header: "Company",
+      className: "w-[10%] align-top",
+      headerClassName: "w-[10%]",
       render: (row) => row.employer ? <span className="text-sm font-medium text-slate-700">{row.employer}</span> : <CompanyBadge workspace={row.workspace} />,
     },
     {
       key: "position",
       header: "Position",
+      className: "w-[20%] align-top",
+      headerClassName: "w-[20%]",
       render: (row) => (
-        <span className="text-sm text-slate-700 truncate block">
+        <span className="block break-words text-sm leading-snug text-slate-700" title={row.position || "—"}>
           {row.position || "—"}
         </span>
       ),
@@ -358,12 +364,16 @@ export default function EmployeesPage() {
     {
       key: "status",
       header: "Status",
+      className: "w-[10%] align-top",
+      headerClassName: "w-[10%]",
       render: (row) => <RowStatusBadge status={row.status} />,
     },
     {
       key: "lates",
       header: "Lates",
       align: "right",
+      className: "w-[6%] align-top",
+      headerClassName: "w-[6%]",
       render: (row) => (
         <span className="font-semibold text-slate-900">
           {formatCount(row.latesCount)}
@@ -374,24 +384,32 @@ export default function EmployeesPage() {
       key: "absences",
       header: "Absences",
       align: "right",
+      className: "w-[6%] align-top",
+      headerClassName: "w-[6%]",
       render: (row) => formatCount(row.absenceCount),
     },
     {
       key: "exemptions",
       header: "Exemptions",
       align: "right",
+      className: "w-[7%] align-top",
+      headerClassName: "w-[7%]",
       render: (row) => formatCount(row.lateExemptionsCount),
     },
     {
       key: "undertime",
       header: "Undertime",
       align: "right",
+      className: "w-[7%] align-top",
+      headerClassName: "w-[7%]",
       render: (row) => formatCount(row.undertimeCount),
     },
     {
       key: "actions",
       header: "Actions",
       align: "right",
+      className: "w-[12%] align-top",
+      headerClassName: "w-[12%]",
       render: (row) => {
         if (readOnly) return <span className="text-sm text-slate-500">View only</span>;
         if (!row.employee) {
@@ -412,7 +430,7 @@ export default function EmployeesPage() {
         }
 
         return (
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
               variant="secondary"

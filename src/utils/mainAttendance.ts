@@ -9,7 +9,13 @@ export type MainDailyAttendance = {
   employeeId: string | null; employeeName: string; rawName: string; deviceNo: string | null;
   workDate: string; firstIn: string | null; lastOut: string | null;
   biometricLastOut?: string | null;
-  checkoutSource: "biometric" | "manual" | null;
+  biometricLastOutAt?: string | null;
+  effectiveLastOutAt?: string | null;
+  serviceEventId?: string | null;
+  biometricFirstIn?: string | null;
+  checkinSource?: "biometric" | "manual" | null;
+  manualCheckinNote?: string | null;
+  checkoutSource: "biometric" | "manual" | "service" | null;
   manualCheckoutNote?: string | null;
   status: "complete" | "missing_checkout" | "unmatched_employee";
   lateMinutes: number; lateSeconds: number; halfDay: boolean; undertimeMinutes: number;

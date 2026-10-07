@@ -26,6 +26,76 @@ export function classifyUploadedTimeIn(date: string, hours: number, minutes: num
   return { kind: "unchanged" };
 }
 
+/** Match a biometric employee label to one Employee Master name when the
+ * source contains a single-character spelling error (for example Rolan/Roldan).
+ * The candidate must have the same token count and only one near-match token. */
+export function attendanceNameMatchesEmployee(input: string, candidate: string) {
+  const tokens = (value: string) => value.toLocaleLowerCase().replace(/[.,]/g, " ").trim().split(/\s+/).filter(Boolean);
+  const left = tokens(input);
+  const right = tokens(candidate);
+  if (left.length !== right.length || left.length === 0) return false;
+  let differences = 0;
+  const distanceAtMostOne = (a: string, b: string) => {
+    if (a === b) return true;
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0; let j = 0; let edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { i += 1; j += 1; continue; }
+      edits += 1;
+      if (edits > 1) return false;
+      if (a.length > b.length) i += 1;
+      else if (b.length > a.length) j += 1;
+      else { i += 1; j += 1; }
+    }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  };
+  left.forEach((token, index) => { if (!distanceAtMostOne(token, right[index])) differences += 1; });
+  return differences <= 1;
+}
+
+const ATTENDANCE_FILE_DATE = /\battendance\s+([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\b/i;
+const ATTENDANCE_MONTHS = new Map([
+  ["january", 0], ["february", 1], ["march", 2], ["april", 3], ["may", 4], ["june", 5],
+  ["july", 6], ["august", 7], ["september", 8], ["october", 9], ["november", 10], ["december", 11],
+]);
+
+export function attendanceDateFromFileName(fileName: string) {
+  const match = ATTENDANCE_FILE_DATE.exec(fileName);
+  if (!match) return null;
+  const month = ATTENDANCE_MONTHS.get(match[1].toLocaleLowerCase());
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+  if (month == null || !Number.isInteger(day) || !Number.isInteger(year)) return null;
+  const date = new Date(Date.UTC(year, month, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day ? date.getTime() : null;
+}
+
+export type UploadedAttendanceFileSortShape = {
+  id?: string;
+  fileName: string;
+  uploadedAt: string;
+  attendanceDates?: string[];
+};
+
+export function sortUploadedAttendanceFiles<T extends UploadedAttendanceFileSortShape>(files: T[]) {
+  const attendanceTime = (file: T) => {
+    const fromName = attendanceDateFromFileName(file.fileName);
+    if (fromName != null) return fromName;
+    const dates = (file.attendanceDates ?? []).map((value) => Date.parse(`${value.slice(0, 10)}T00:00:00`)).filter(Number.isFinite);
+    return dates.length > 0 ? Math.max(...dates) : null;
+  };
+  return [...files].sort((a, b) => {
+    const aAttendance = attendanceTime(a);
+    const bAttendance = attendanceTime(b);
+    if (aAttendance != null && bAttendance != null && aAttendance !== bAttendance) return bAttendance - aAttendance;
+    if (aAttendance != null && bAttendance == null) return -1;
+    if (aAttendance == null && bAttendance != null) return 1;
+    const uploadedDifference = new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime();
+    if (Number.isFinite(uploadedDifference) && uploadedDifference !== 0) return uploadedDifference;
+    return String(b.id ?? "").localeCompare(String(a.id ?? ""));
+  });
+}
+
 function minutesToTime(value: number) {
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
 }
@@ -106,6 +176,33 @@ export function matchesDateScope(dateValue: string, monthScope: string, dayScope
   if (dayScope !== "all") return normalized === normalizeAttendanceDate(dayScope);
   if (monthScope !== "all") return normalized.slice(0, 7) === monthScope;
   return true;
+}
+
+export type DateFilterValue = "all" | string;
+
+function calendarParts(value: string) {
+  const normalized = normalizeAttendanceDate(value);
+  if (!normalized) return null;
+  const [year, month, day] = normalized.split("-").map(Number);
+  return { year: String(year), month: String(month).padStart(2, "0"), date: normalized, time: new Date(year, month - 1, day).getTime() };
+}
+
+export function matchesDateFilters(value: string, year: DateFilterValue, month: DateFilterValue, exactDate: DateFilterValue) {
+  const parts = calendarParts(value);
+  if (!parts) return false;
+  return (year === "all" || parts.year === year) && (month === "all" || parts.month === month) && (exactDate === "all" || parts.date === normalizeAttendanceDate(exactDate));
+}
+
+export function dateFilterYears(values: string[]) {
+  return [...new Set(values.map(calendarParts).filter(Boolean).map((item) => item!.year))].sort((a, b) => b.localeCompare(a));
+}
+
+export function dateFilterMonths(values: string[], year: DateFilterValue = "all") {
+  return [...new Set(values.map(calendarParts).filter((item) => item && (year === "all" || item.year === year)).map((item) => item!.month))].sort();
+}
+
+export function dateFilterDates(values: string[], year: DateFilterValue = "all", month: DateFilterValue = "all") {
+  return [...new Set(values.map(calendarParts).filter((item) => item && (year === "all" || item.year === year) && (month === "all" || item.month === month)).map((item) => item!.date))].sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
 }
 
 export function attendanceRecordRange(date: string, timeIn: string) {

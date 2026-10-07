@@ -58,10 +58,10 @@ export function DataTable<T>({
 
   return (
     <div
-      className={`overflow-x-auto ${stickyHeader ? "overflow-y-auto" : ""} ${className}`}
+      className={`min-w-0 overflow-x-auto md:overflow-x-visible ${stickyHeader ? "overflow-y-auto" : ""} ${className}`}
       style={scrollStyle}
     >
-      <table className="min-w-full text-sm border-collapse">
+      <table className="w-full table-fixed text-sm border-collapse">
         <thead
           className={`bg-slate-50 border-y border-slate-200 ${
             stickyHeader ? "sticky top-0 z-10" : ""
@@ -91,7 +91,7 @@ export function DataTable<T>({
                   key={c.key}
                   className={`${cellPad} text-slate-700 ${
                     alignClass[c.align ?? "left"]
-                  } ${c.className ?? ""}`}
+                  } break-words ${c.className ?? ""}`}
                 >
                   {c.render(row, idx)}
                 </td>

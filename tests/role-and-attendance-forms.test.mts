@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ExcelJS from "exceljs";
 import { canAccessPath } from "../src/utils/access.ts";
-import { activeEmployeeOptions, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime } from "../src/utils/attendanceForms.ts";
+import { activeEmployeeOptions, attendanceDateFromFileName, attendanceNameMatchesEmployee, attendanceRecordRange, classifyGeneratedHalfDay, classifyUploadedTimeIn, countUndertimeRecords, dateFilterDates, dateFilterMonths, dateFilterYears, durationMinutes, formatDuration, formatTime12Hour, formatTime12HourWithOptionalSeconds, generatedUndertimeMinutes, halfDayMatchesScope, halfDayRange, matchesDateFilters, matchesDateScope, normalizeAttendanceDate, parseAttendanceDateTime, sortUploadedAttendanceFiles } from "../src/utils/attendanceForms.ts";
 import { LOGIN_ACCOUNTS } from "../src/utils/loginAccounts.ts";
 import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../src/utils/exemptionForms.ts";
 import { adjustmentPartsToMinutes, ANNUAL_LEAVE_ENTITLEMENT_MINUTES, calculateAnnualLeaveTotals, calculateLeaveDuration, countRejectedLeaveRequests, formatLeaveDate, formatLeaveMinutes, formatRemainingLeaveMinutes, formatLeaveRequestDuration, formatLeaveStatus, formatLeaveTime, leaveBalance, remainingLeaveAdjustment, requestableLeaveBalance } from "../src/utils/leaveRules.ts";
@@ -477,7 +477,7 @@ test("MAIN Attendance Records uses human-readable month labels and editable chec
   assert.match(page, /month: "long", year: "numeric"/);
   assert.match(page, /<option value="all">All months<\/option>/);
   assert.match(page, /value=\{m\}>\{monthLabel\(m\)\}/);
-  assert.match(page, /r\.employeeId \? <Button size="sm" onClick=\{\(\) => openCheckout\(r\)\}/);
+  assert.match(page, /openEditor\("checkout", r/);
   assert.match(page, /r\.lastOut \? "Update Check-Out" : "Add Check-Out"/);
   assert.match(page, /Current Last Out/);
   assert.match(page, /Current Source/);
@@ -929,10 +929,58 @@ test("half-day ranges follow weekday and Saturday schedules", () => {
 });
 
 test("uploaded weekday boundary classifications are mutually exclusive", () => {
-  const samples = [[8,5,"on_time"],[8,6,"late"],[8,59,"late"],[9,0,"undertime"],[9,3,"undertime"],[11,50,"undertime"],[11,51,"half_day"],[13,0,"half_day"],[13,1,"undertime"]] as const;
+  const samples = [[8,5,"on_time"],[8,6,"late"],[8,59,"late"],[9,0,"undertime"],[9,3,"undertime"],[11,50,"undertime"],[11,51,"half_day"],[12,0,"half_day"],[12,34,"half_day"],[12,50,"half_day"],[13,0,"half_day"],[13,1,"undertime"]] as const;
   for (const [hour, minute, kind] of samples) assert.equal(classifyUploadedTimeIn("2026-09-07", hour, minute, 0).kind, kind);
   assert.equal(generatedUndertimeMinutes("2026-09-07", 9, 3, 0), 63);
   assert.deepEqual(classifyGeneratedHalfDay("2026-09-07", 11, 51, 0), { period: "morning", scheduledStart: "08:00", scheduledEnd: "12:00" });
+});
+
+test("Service management is workspace-scoped with WAIS-only attendance integration", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/042_service_management_main_integration.sql", import.meta.url), "utf8");
+  const routes = readFileSync(new URL("../src/app/routes.tsx", import.meta.url), "utf8");
+  const layout = readFileSync(new URL("../src/components/layout/RootLayout.tsx", import.meta.url), "utf8");
+  assert.match(routes, /path: "service"/);
+  assert.match(layout, /name: "Service"/);
+  assert.match(migration, /attendance_role\(\) is distinct from 'HR'/);
+  assert.match(migration, /attendance_workspace\(\) is distinct from p_workspace/);
+  assert.match(migration, /service_event_employees/);
+  assert.match(migration, /p_workspace='WAIS'/);
+  assert.match(migration, /checkout_source='service'/);
+  assert.match(migration, /biometric_last_out_at/);
+  assert.match(migration, /source_attendance_id=a\.id/);
+  assert.match(readFileSync(new URL("../src/pages/Service.tsx", import.meta.url), "utf8"), /role === "HR"/);
+});
+
+test("APP/ITC midday punches classify as morning-absent half-days with seconds-safe boundaries", () => {
+  for (const [hour, minute, second] of [[12, 0, 0], [12, 34, 32], [12, 50, 5], [13, 0, 59]] as const) {
+    assert.equal(classifyUploadedTimeIn("2026-09-29", hour, minute, second).kind, "half_day");
+  }
+  assert.notEqual(classifyUploadedTimeIn("2026-09-29", 13, 1, 0).kind, "half_day");
+  assert.equal(attendanceNameMatchesEmployee("De Jesus, Roy Rolan", "De Jesus, Roy Roldan"), true);
+});
+
+test("attendance file history sorts by attendance date, then upload time, with invalid-name fallback", () => {
+  const files = [
+    { id: "sep29-late", fileName: "Attendance September 29, 2026.xlsx", uploadedAt: "2026-10-03T11:17:00" },
+    { id: "sep30", fileName: "Attendance September 30, 2026.xlsx", uploadedAt: "2026-10-03T10:20:00" },
+    { id: "oct1", fileName: "Attendance October 1, 2026.xlsx", uploadedAt: "2026-10-03T09:00:00" },
+    { id: "dec31", fileName: "Attendance December 31, 2026.xlsx", uploadedAt: "2026-10-03T08:00:00" },
+    { id: "jan1", fileName: "Attendance January 1, 2026.xlsx", uploadedAt: "2026-10-03T12:00:00" },
+    { id: "same-old", fileName: "Attendance September 30, 2026.xlsx", uploadedAt: "2026-10-03T09:00:00" },
+    { id: "invalid", fileName: "legacy-upload.xlsx", uploadedAt: "2026-10-03T13:00:00" },
+  ];
+  assert.equal(attendanceDateFromFileName(files[0].fileName), Date.UTC(2026, 8, 29));
+  assert.deepEqual(sortUploadedAttendanceFiles(files).map((file) => file.id), ["dec31", "oct1", "sep30", "same-old", "sep29-late", "jan1", "invalid"]);
+});
+
+test("shared date filters combine year, month, and exact date while preserving newest-first ordering", () => {
+  const dates = ["2026-09-29", "2026-09-30", "2026-10-01", "2025-09-30"];
+  assert.deepEqual(dateFilterYears(dates), ["2026", "2025"]);
+  assert.deepEqual(dateFilterMonths(dates, "2026"), ["09", "10"]);
+  assert.deepEqual(dateFilterDates(dates, "2026", "09"), ["2026-09-30", "2026-09-29"]);
+  assert.equal(matchesDateFilters("2026-09-29", "2026", "09", "2026-09-29"), true);
+  assert.equal(matchesDateFilters("2026-09-30", "2026", "09", "2026-09-29"), false);
+  assert.equal(matchesDateFilters("2025-09-30", "all", "all", "all"), true);
 });
 
 test("uploaded Saturday boundary classifications are mutually exclusive", () => {
@@ -1468,10 +1516,42 @@ test("MAIN checkout notes are loaded and prefilled without changing biometric ch
   const migration = readFileSync(new URL("../supabase/migrations/027_preserve_main_biometric_checkout.sql", import.meta.url), "utf8");
 
   assert.match(service, /manualCheckoutNote: row\.manual_checkout_note \?\? null/);
-  assert.match(page, /setCheckoutNote\(record\.manualCheckoutNote \?\? ""\)/);
+  assert.match(page, /setEditNote\(mode === "checkin" \? record\.manualCheckinNote \?\? "" : record\.manualCheckoutNote \?\? ""\)/);
   assert.match(page, /Current Note/);
   assert.match(migration, /manual_checkout_note=nullif\(btrim\(p_note\),''\)/);
   assert.match(migration, /biometric_last_out=original_biometric/);
+});
+
+test("manual check-in is restricted to WAIS/MAIN HR and preserves the biometric first-in", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/041_main_manual_checkin_wais_hr.sql", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/AttendanceRecords.tsx", import.meta.url), "utf8");
+
+  assert.match(migration, /attendance_role\(\) <> 'HR'/);
+  assert.match(migration, /attendance_hr_scope\(\) <> 'MAIN'/);
+  assert.match(migration, /workspace = 'WAIS'/);
+  assert.match(migration, /biometric_first_in = original_first_in/);
+  assert.match(migration, /first_in_source = 'manual'/);
+  assert.match(migration, /manual_checkin/);
+  assert.match(migration, /late_records/);
+  assert.match(migration, /half_day_records/);
+  assert.match(migration, /source_type = 'system_generated'/);
+  assert.match(service, /set_main_manual_checkin/);
+  assert.match(context, /hrScope !== "MAIN" \|\| role !== "HR"/);
+  assert.match(page, /saveManualCheckin/);
+  assert.match(page, /Add Check-In/);
+  assert.match(page, /Update Check-In/);
+  assert.match(page, /Original Biometric First In/);
+});
+
+test("APP/ITC attendance paths remain separate from MAIN manual check-in", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/041_main_manual_checkin_wais_hr.sql", import.meta.url), "utf8");
+  const attendance = readFileSync(new URL("../src/utils/mainAttendance.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(migration, /workspace = 'APP'/);
+  assert.doesNotMatch(migration, /attendance_hr_scope\(\) = 'ITC'/);
+  assert.match(attendance, /classifyUploadedTimeIn/);
+  assert.match(attendance, /aggregateMainAttendance/);
 });
 
 test("MAIN Admin can view Attendance Records but cannot use HR actions", () => {
@@ -1482,7 +1562,9 @@ test("MAIN Admin can view Attendance Records but cannot use HR actions", () => {
   assert.match(routes, /attendance-records", element: <ProtectedRoute allowedRoles=\{\["Admin", "HR"\]\}/);
   assert.match(layout, /Attendance Records", href: "\/attendance-records", icon: ListChecks, roles: \["Admin", "HR"\], mainOnly: true/);
   assert.match(page, /const canManage = role === "HR"/);
-  assert.match(page, /\{canManage && checkoutRecord/);
+  assert.match(page, /\{canManage && activeModal/);
+  assert.match(page, /AttendanceEditDialog/);
+  assert.match(page, /openEditor\("checkout", r/);
   assert.match(page, /Maintenance/);
 });
 

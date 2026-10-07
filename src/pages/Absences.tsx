@@ -124,7 +124,10 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     const reasons = new Map<string, number>();
     rows.forEach((record) => reasons.set(record.reason, (reasons.get(record.reason) ?? 0) + 1));
-    return { month: rows.filter((record) => getMonthKey(record.date) === monthKey).length, year: rows.filter((record) => getSafeDate(record.date).getFullYear() === now.getFullYear()).length, commonReason: [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Not available" };
+    const max = Math.max(0, ...reasons.values());
+    const winners = [...reasons.entries()].filter(([, count]) => count === max);
+    const commonReason = max === 0 ? "No data" : winners.length === 1 ? winners[0][0] : "No single most frequent reason";
+    return { month: rows.filter((record) => getMonthKey(record.date) === monthKey).length, year: rows.filter((record) => getSafeDate(record.date).getFullYear() === now.getFullYear()).length, commonReason };
   }, [sourceAbsences, selectedEmployee, hrScope, readOnly, itcEmployee, itcEmployeeId]);
 
   const handleSubmit = async (e: React.FormEvent) => {

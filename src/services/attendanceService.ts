@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase";
 import { formatOptionalReportedTime } from "../utils/exemptionForms";
+import { sortUploadedAttendanceFiles } from "../utils/attendanceForms";
 import type {
   AbsentRecord,
   Exemption,
@@ -16,6 +17,16 @@ import {
 } from "../utils/mainAttendance";
 
 type Workspace = "APP" | "WAIS";
+
+export type DateExemptionRule = {
+  id: string;
+  workspace: Workspace;
+  exemptionDate: string;
+  reason: string;
+  note?: string;
+  createdAt: string;
+  isActive: boolean;
+};
 
 const ATTENDANCE_STORAGE_BUCKET = "attendance-files";
 
@@ -345,16 +356,18 @@ export async function loadAttendanceData(workspace: Workspace) {
     }
   });
 
-  const uploadedFiles = Array.from(fileMap.values())
+  const uploadedFiles = sortUploadedAttendanceFiles(Array.from(fileMap.values()).map((file) => ({
+    ...file,
+    attendanceDates: [
+      ...file.lateRecords.map((record) => record.date),
+      ...file.generatedUndertimes.map((record) => record.date),
+    ],
+  })))
     .map((file) => ({
       ...file,
       lateRecords: sortByDateTime(file.lateRecords),
       generatedUndertimes: sortByDateTime(file.generatedUndertimes),
     }))
-    .sort(
-      (a, b) =>
-        new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-    );
 
   const exemptions: Exemption[] = (exemptionsResult.data ?? []).map((item) => {
     const linkedLate = (lateRecordsResult.data ?? []).find((late) => rowId(late.id) === rowId(item.late_record_id));
@@ -617,7 +630,7 @@ export async function loadCrossWorkspaceExemptionWorkflowData(workspace: Workspa
   if (!supabase) throw new Error("Supabase is not configured.");
   const [lateResult, exemptionResult] = await Promise.all([
     supabase.from("late_records").select("id, workspace, employee_name, work_date, time_in, minutes_late, seconds_late, total_seconds_late, source_file_id, source_file_name, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
-    supabase.from("exemptions").select("id, workspace, employee_name, work_date, reason, minutes_late, reported_time, informed_parties, approval_status, late_record_id, reviewed_by, reviewed_at, review_remarks, late_restored_at, late_restored_by, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
+    supabase.from("exemptions").select("id, workspace, employee_id, employee_name, work_date, reason, minutes_late, reported_time, informed_parties, approval_status, late_record_id, reviewed_by, reviewed_at, review_remarks, late_restored_at, late_restored_by, source_type, date_rule_id, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
   ]);
   if (lateResult.error) throw lateResult.error;
   if (exemptionResult.error) throw exemptionResult.error;
@@ -627,12 +640,13 @@ export async function loadCrossWorkspaceExemptionWorkflowData(workspace: Workspa
     })),
     exemptions: (exemptionResult.data ?? []).map((item) => {
       const linkedLate = (lateResult.data ?? []).find((late) => rowId(late.id) === rowId(item.late_record_id));
-      return { id: rowId(item.id), name: item.employee_name, date: toDisplayDate(item.work_date), reason: item.reason,
+      return { id: rowId(item.id), employeeId: item.employee_id == null ? undefined : rowId(item.employee_id), name: item.employee_name, date: toDisplayDate(item.work_date), reason: item.reason,
         minutesLate: linkedLate?.minutes_late ?? item.minutes_late ?? undefined, lateTime: linkedLate?.time_in ?? undefined,
         time: formatOptionalReportedTime(item.reported_time), informed: normalizeTextList(item.informed_parties), approvalStatus: item.approval_status ?? "pending",
         lateRecordId: item.late_record_id == null ? undefined : rowId(item.late_record_id), reviewedBy: item.reviewed_by ?? undefined,
         reviewedAt: item.reviewed_at ?? undefined, reviewRemarks: item.review_remarks ?? undefined,
-        lateRestoredAt: item.late_restored_at ?? undefined, lateRestoredBy: item.late_restored_by ?? undefined };
+        lateRestoredAt: item.late_restored_at ?? undefined, lateRestoredBy: item.late_restored_by ?? undefined,
+        sourceType: item.source_type === "date_rule" ? "date_rule" : "individual", dateRuleId: item.date_rule_id == null ? undefined : rowId(item.date_rule_id) };
     }),
   };
 }
@@ -792,8 +806,14 @@ export async function loadMainDailyAttendance(): Promise<MainDailyAttendance[]> 
     deviceNo: row.device_no,
     workDate: row.work_date,
     firstIn: row.first_in,
+    biometricFirstIn: row.biometric_first_in ?? row.first_in ?? null,
+    checkinSource: row.first_in_source ?? "biometric",
+    manualCheckinNote: row.manual_first_in_note ?? null,
     lastOut: row.last_out,
     biometricLastOut: row.biometric_last_out ?? null,
+    biometricLastOutAt: row.biometric_last_out_at ?? null,
+    effectiveLastOutAt: row.effective_last_out_at ?? null,
+    serviceEventId: row.service_event_id == null ? null : String(row.service_event_id),
     checkoutSource: row.checkout_source,
     manualCheckoutNote: row.manual_checkout_note ?? null,
     status: row.status,
@@ -897,6 +917,36 @@ export async function saveManualUndertimeRecord(
 
   if (error) throw error;
   return { ...undertime, id: rowId(data) };
+}
+
+export async function saveMainManualCheckin(recordId: string, checkinTime: string, note?: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("set_main_manual_checkin", {
+    p_record_id: recordId,
+    p_checkin_time: checkinTime,
+    p_note: note?.trim() || null,
+  });
+  if (error) throw error;
+}
+
+export async function createDateExemptionRule(input: { date: string; reason: string; note?: string }) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("create_date_exemption_rule", { p_date: input.date, p_reason: input.reason, p_note: input.note ?? null });
+  if (error) throw error;
+  return rowId(data);
+}
+
+export async function listDateExemptionRules(workspace: Workspace): Promise<DateExemptionRule[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.from("date_exemption_rules").select("id, workspace, exemption_date, reason, note, created_at, is_active").eq("workspace", workspace).order("exemption_date", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((item) => ({ id: rowId(item.id), workspace: item.workspace as Workspace, exemptionDate: String(item.exemption_date), reason: String(item.reason), note: item.note ?? undefined, createdAt: String(item.created_at), isActive: item.is_active !== false }));
+}
+
+export async function disableDateExemptionRule(id: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("disable_date_exemption_rule", { p_rule_id: id });
+  if (error) throw error;
 }
 
 export async function updateGeneratedUndertimeDetails(id: string, reason: string, informed: string[]) {

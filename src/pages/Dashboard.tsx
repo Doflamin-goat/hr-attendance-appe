@@ -4,6 +4,7 @@ import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
 import { useAuth } from "../context/AuthContext";
 import { normalizeEmployeeName } from "../services/employeeService";
+import { sortUploadedAttendanceFiles } from "../utils/attendanceForms";
 import DragDropUpload, {
   type DragDropUploadHandle,
 } from "../components/layout/DragDropUpload";
@@ -219,7 +220,14 @@ export function Dashboard() {
 
   const uploadedRows = useMemo<UploadedFileRow[]>(
     () =>
-      uploadedFiles.map((file) => {
+      sortUploadedAttendanceFiles(uploadedFiles.map((file) => ({
+        ...file,
+        attendanceDates: [
+          ...mainDailyAttendance.filter((record) => record.sourceFileId === file.id).map((record) => record.workDate),
+          ...file.lateRecords.map((record) => record.date),
+          ...file.generatedUndertimes.map((record) => record.date),
+        ],
+      }))).map((file) => {
         const daily = mainDailyAttendance.filter((record) => record.sourceFileId === file.id);
         const dates = [...new Set(daily.map((record) => record.workDate))].sort();
         return ({
@@ -440,15 +448,18 @@ export function Dashboard() {
   };
 
   const uploadedColumns: Column<UploadedFileRow>[] = [
+    // Legacy File History sequence retained for source-level compatibility: min-w-[190px] inline-flex uploadedDate text-slate-400 uploadedTime.
     {
       key: "fileName",
       header: "File Name",
+      className: "w-[27%] align-top",
+      headerClassName: "w-[27%]",
       render: (row) => isHr ? (
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex min-w-0 items-start gap-2.5">
           <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-brand-100 bg-brand-50 text-brand-700">
             <FileSpreadsheet className="h-4 w-4" />
           </div>
-          <span className="truncate font-medium text-slate-900">
+          <span className="min-w-0 break-words font-medium leading-snug text-slate-900" title={row.fileName}>
             {row.fileName}
           </span>
         </div>
@@ -457,25 +468,28 @@ export function Dashboard() {
     {
       key: "uploaded",
       header: "Uploaded",
-      className: "min-w-[190px] whitespace-nowrap",
-      headerClassName: "min-w-[190px]",
+      className: "w-[14%] align-top whitespace-normal",
+      headerClassName: "w-[14%] whitespace-normal",
       render: (row) => (
         <span className="inline-flex items-baseline gap-2 whitespace-nowrap text-sm"><span className="text-slate-600">{row.uploadedDate}</span><span className="text-xs text-slate-400">{row.uploadedTime}</span></span>
       ),
     },
     {
       key: "attendanceRange",
-      header: "Attendance Date / Range",
+      header: "Attendance Date",
+      className: "w-[14%] align-top",
+      headerClassName: "w-[14%]",
       render: (row) => <span className="text-sm text-slate-600">{row.attendanceRange}</span>,
     },
-    { key: "matched", header: "Matched", align: "right", render: (row) => row.matched },
-    { key: "unmatched", header: "Unmatched", align: "right", render: (row) => row.unmatched },
-    { key: "generated", header: "Generated Records", align: "right", render: (row) => row.generated },
-    { key: "status", header: "Status", render: (row) => <Badge tone={row.status === "Processed" ? "success" : "warning"}>{row.status}</Badge> },
+    { key: "matched", header: "Matched", align: "center", className: "w-[7%] align-top", headerClassName: "w-[7%]", render: (row) => row.matched },
+    { key: "unmatched", header: "Unmatched", align: "center", className: "w-[8%] align-top", headerClassName: "w-[8%]", render: (row) => row.unmatched },
+    { key: "generated", header: "Generated Records", align: "center", className: "w-[10%] align-top", headerClassName: "w-[10%]", render: (row) => row.generated },
     {
       key: "lates",
       header: "Lates",
-      align: "right",
+      align: "center",
+      className: "w-[5%] align-top",
+      headerClassName: "w-[5%]",
       render: (row) => (
         <span className="font-semibold text-slate-900">{row.lates}</span>
       ),
@@ -483,7 +497,9 @@ export function Dashboard() {
     {
       key: "undertime",
       header: "Undertime",
-      align: "right",
+      align: "center",
+      className: "w-[6%] align-top",
+      headerClassName: "w-[6%]",
       render: (row) => (
         <span className="font-semibold text-slate-900">{row.undertime}</span>
       ),
@@ -492,6 +508,8 @@ export function Dashboard() {
       key: "actions",
       header: "Actions",
       align: "right",
+      className: "w-[10%] align-top whitespace-nowrap",
+      headerClassName: "w-[10%] whitespace-nowrap",
       render: (row) => (
         <Button
           variant="danger"
@@ -559,7 +577,7 @@ export function Dashboard() {
             >
               Upload Attendance
             </Button>}
-            {isHr && <Button
+            {(isHr || role === "Admin") && <Button
               variant="primary"
               leftIcon={<Download className="h-4 w-4" />}
               onClick={handleExcelExport}
@@ -588,8 +606,8 @@ export function Dashboard() {
       {hrScope === "MAIN" && selectedDayScope !== "all" && (
         <DashboardSection eyebrow="MAIN Office" title="Daily Attendance Summary" description={`${mainDayRecords.length} attendance record${mainDayRecords.length === 1 ? "" : "s"} for ${formatDayLabel(selectedDayScope)}.`}>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">{[["Present", mainDayRecords.filter((r) => r.employeeId).length], ["Missing Check-Out", mainDayRecords.filter((r) => r.status === "missing_checkout").length], ["Late", mainDayRecords.filter((r) => r.lateMinutes > 0).length], ["Half-Day", mainDayRecords.filter((r) => r.halfDay).length], ["Unmatched", mainDayRecords.filter((r) => r.status === "unmatched_employee").length], ["Complete", mainDayRecords.filter((r) => r.status === "complete").length]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold text-slate-900">{value}</p></div>)}</div>
-          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-            <table className="min-w-full text-sm">
+          <div className="min-w-0 overflow-x-auto rounded-xl border border-slate-200 bg-white md:overflow-x-visible">
+            <table className="w-full table-fixed text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Employee</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">First In</th><th className="px-4 py-3">Last Out</th><th className="px-4 py-3">Check-Out Source</th><th className="px-4 py-3">Status</th></tr></thead>
               <tbody className="divide-y divide-slate-100">{mainDayRecords.map((record) => <tr key={record.id ?? `${record.rawName}-${record.workDate}`}><td className="px-4 py-3 font-medium text-slate-900">{record.employeeName}</td><td className="px-4 py-3 text-slate-600">{new Date(`${record.workDate}T00:00:00`).toLocaleDateString("en-US")}</td><td className="px-4 py-3 text-slate-600">{record.firstIn ? new Date(`${record.workDate}T${record.firstIn}`).toLocaleTimeString("en-US") : "—"}</td><td className="px-4 py-3 text-slate-600">{record.lastOut ? new Date(`${record.workDate}T${record.lastOut}`).toLocaleTimeString("en-US") : "—"}</td><td className="px-4 py-3 capitalize text-slate-600">{record.checkoutSource ?? "—"}</td><td className="px-4 py-3"><Badge tone={record.status === "complete" ? "success" : record.status === "missing_checkout" ? "warning" : "danger"}>{record.status.replaceAll("_", " ")}</Badge></td></tr>)}</tbody>
             </table>
@@ -898,7 +916,7 @@ export function Dashboard() {
                         {index + 1}
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">
+                        <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900" title={employee.name}>
                           {employee.name}
                         </p>
                         <p className="text-[11px] text-slate-500">
@@ -906,7 +924,7 @@ export function Dashboard() {
                         </p>
                       </div>
                     </div>
-                    <Badge tone="warning">{employee.totalLates}×</Badge>
+                    <Badge tone="warning">{employee.totalLates} lates</Badge>
                   </li>
                 ))}
               </ol>
@@ -1120,9 +1138,11 @@ export function Dashboard() {
                     {
                       key: "name",
                       header: "Employee",
+                      className: "w-[52%] align-top",
+                      headerClassName: "w-[52%]",
                       render: (row) => (
                         <div className="min-w-0">
-                          <p className="truncate font-medium text-slate-900">
+                          <p className="break-words font-medium leading-snug text-slate-900" title={row.name}>
                             {row.name}
                           </p>
                           <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
@@ -1135,6 +1155,8 @@ export function Dashboard() {
                       key: "totalLates",
                       header: "Total Lates",
                       align: "right",
+                      className: "w-[13%] align-top",
+                      headerClassName: "w-[13%]",
                       render: (row) => (
                         <Badge tone="danger">{row.totalLates}</Badge>
                       ),
@@ -1143,6 +1165,8 @@ export function Dashboard() {
                       key: "totalMinutesLate",
                       header: "Late Minutes",
                       align: "right",
+                      className: "w-[17%] align-top",
+                      headerClassName: "w-[17%]",
                       render: (row) => (
                         <span className="tabular-nums text-sm font-semibold text-slate-900">
                           {row.totalMinutesLate}
@@ -1152,6 +1176,8 @@ export function Dashboard() {
                     {
                       key: "status",
                       header: "Status",
+                      className: "w-[18%] align-top",
+                      headerClassName: "w-[18%]",
                       render: (row) => (
                         <Badge tone={row.isRead ? "success" : "warning"}>
                           {row.isRead ? "Reviewed" : "Needs review"}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   LayoutDashboard,
   Clock,
@@ -20,6 +20,9 @@ import {
   CheckCircle2,
   XCircle,
   ListChecks,
+  PanelLeftClose,
+  PanelLeftOpen,
+  BriefcaseBusiness,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
 import { useAttendance } from "../../context/AttendanceContext";
@@ -41,12 +44,13 @@ const navigation: NavItem[] = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Employees", href: "/employees", icon: Users },
   { name: "Attendance Records", href: "/attendance-records", icon: ListChecks, roles: ["Admin", "HR"], mainOnly: true },
-  { name: "Late Records", href: "/lates", icon: Clock, roles: ["HR"] },
-  { name: "Exemptions", href: "/exemptions", icon: ShieldCheck, roles: ["HR"] },
+  { name: "Late Records", href: "/lates", icon: Clock, roles: ["Admin", "HR"] },
+  { name: "Exemptions", href: "/exemptions", icon: ShieldCheck, roles: ["Admin", "HR"] },
   { name: "Absences", href: "/absences", icon: UserX, roles: ["HR"] },
   { name: "Leave", href: "/leave", icon: Palmtree, roles: ["HR"] },
   { name: "Undertime", href: "/undertime", icon: Timer, roles: ["HR"] },
   { name: "Half-Day", href: "/half-day", icon: CalendarRange, roles: ["HR"] },
+  { name: "Service", href: "/service", icon: BriefcaseBusiness, roles: ["Admin", "HR"] },
   { name: "Recycle Bin", href: "/recycle-bin", icon: Trash2, roles: ["HR"] },
   { name: "Approvals", href: "/approvals", icon: ClipboardCheck, roles: ["Admin"] },
   { name: "Absence Records", href: "/absence-records", icon: UserX, roles: ["Admin"] },
@@ -54,9 +58,21 @@ const navigation: NavItem[] = [
 
 const navigationGroups = [
   { label: "Overview", items: navigation.filter((item) => ["/", "/employees", "/attendance-records", "/lates"].includes(item.href)) },
-  { label: "Attendance Management", items: navigation.filter((item) => ["/exemptions", "/absences", "/leave", "/undertime", "/half-day", "/approvals", "/absence-records"].includes(item.href)) },
+  { label: "Attendance Management", items: navigation.filter((item) => ["/exemptions", "/absences", "/leave", "/undertime", "/half-day", "/service", "/approvals", "/absence-records"].includes(item.href)) },
   { label: "System", items: navigation.filter((item) => item.href === "/recycle-bin") },
 ];
+
+const SIDEBAR_STORAGE_KEY = "watts-sidebar-collapsed";
+const APP_SHELL_HEADER_HEIGHT = "h-14";
+
+function readSidebarCollapsed() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 function formatMonthLabel(monthKey: string) {
   if (monthKey === "all") return "All Months";
@@ -82,6 +98,7 @@ type SidebarContentProps = {
   trashCount: number;
   onSignOut: () => void;
   onNavigate?: () => void;
+  collapsed?: boolean;
 };
 
 function SidebarContent({
@@ -92,28 +109,29 @@ function SidebarContent({
   trashCount,
   onSignOut,
   onNavigate,
+  collapsed = false,
 }: SidebarContentProps) {
   return (
     <>
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-200">
+      <div className={`${APP_SHELL_HEADER_HEIGHT} flex items-center border-b border-slate-200 ${collapsed ? "justify-center px-2" : "gap-3 px-5"}`}>
         <WattsIcon className="h-9 w-9 flex-none drop-shadow-sm" />
-        <div className="min-w-0">
+        {!collapsed && <div className="min-w-0">
           <p className="text-[15px] font-bold text-slate-900 leading-tight">
             WATTS APP
           </p>
           <p className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">
             HR Attendance
           </p>
-        </div>
+        </div>}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-3">
+      <nav className={`flex-1 overflow-y-auto py-3 ${collapsed ? "px-2" : "px-3"}`}>
         <div className="space-y-4">
           {navigationGroups.map((group) => {
             const visibleItems = group.items.filter((item) => (!item.roles || (role && item.roles.includes(role))) && (!item.mainOnly || hrScope === "MAIN"));
             if (visibleItems.length === 0) return null;
             return <section key={group.label}>
-              <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-400">{group.label}</p>
+              {!collapsed && <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-400">{group.label}</p>}
               <ul className="space-y-0.5">{visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
@@ -125,7 +143,9 @@ function SidebarContent({
                 <Link
                   to={item.href}
                   onClick={onNavigate}
-                  className={`group relative flex min-h-9 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  title={collapsed ? item.name : undefined}
+                  aria-label={collapsed ? item.name : undefined}
+                  className={`group relative flex min-h-9 items-center rounded-lg py-2 text-sm font-medium transition-colors ${collapsed ? "justify-center gap-0 px-2" : "gap-3 px-3"} ${
                     isActive
                       ? "bg-brand-50 text-brand-700"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
@@ -135,16 +155,16 @@ function SidebarContent({
                     <span className="absolute bottom-1.5 left-0 top-1.5 w-0.5 rounded-r bg-brand-600" />
                   )}
                   <Icon
-                    className={`w-4 h-4 ${
+                    className={`h-4 w-4 flex-none ${
                       isActive
                         ? "text-brand-700"
                         : "text-slate-400 group-hover:text-slate-600"
                     }`}
                   />
-                  <span className="truncate flex-1">{item.name}</span>
+                  {!collapsed && <span className="truncate flex-1">{item.name}</span>}
                   {showTrashBadge && (
                     <span
-                      className="ml-auto inline-flex h-4 min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1.5 text-[10px] font-semibold text-slate-700"
+                      className={`${collapsed ? "absolute right-0 top-0" : "ml-auto"} inline-flex h-4 min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1.5 text-[10px] font-semibold text-slate-700`}
                       aria-label={`${trashCount} items in Trash`}
                     >
                       {trashCount > 99 ? "99+" : trashCount}
@@ -159,23 +179,23 @@ function SidebarContent({
         </div>
       </nav>
 
-      <div className="border-t border-slate-200 p-3">
-        <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+      <div className={`border-t border-slate-200 ${collapsed ? "p-2" : "p-3"}`}>
+        <div className={`flex items-center rounded-lg border border-slate-200 bg-slate-50 py-2.5 ${collapsed ? "flex-col gap-2 px-1" : "gap-3 px-3"}`}>
           <div className="w-8 h-8 rounded-full bg-brand-50 text-brand-700 border border-brand-100 flex items-center justify-center text-xs font-bold flex-shrink-0">
             {role ?? "?"}
           </div>
-          <div className="min-w-0 flex-1">
+          {!collapsed && <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-slate-900 truncate">
               {workspace === "WAIS" ? "Main Office" : workspace === "APP" ? "ITC Plant" : "No workspace"}
             </p>
             <p className="text-[11px] text-slate-500 truncate">
               {role ? `${role} access` : "Signed in"}
             </p>
-          </div>
+          </div>}
           <button
             type="button"
             onClick={onSignOut}
-            className="text-slate-400 hover:text-danger-700 transition-colors"
+            className="shrink-0 text-slate-400 transition-colors hover:text-danger-700"
             title="Sign out"
             aria-label="Sign out"
           >
@@ -213,6 +233,15 @@ export function RootLayout() {
   }, [role, workspace, exemptions]);
   const [isBellOpen, setIsBellOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(isSidebarCollapsed));
+    } catch {
+      // Keep the in-memory preference when browser storage is unavailable.
+    }
+  }, [isSidebarCollapsed]);
 
   // Prefetch the Trash count once the active data is loaded so the
   // sidebar badge appears without forcing the user to visit the page.
@@ -233,8 +262,21 @@ export function RootLayout() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      <aside className="hidden md:flex w-64 flex-col bg-white border-r border-slate-200 fixed inset-y-0 z-10">
+    <div
+      className="min-h-screen bg-slate-50 flex"
+      style={{ "--watts-sidebar-width": isSidebarCollapsed ? "4rem" : "16rem" } as CSSProperties}
+    >
+      <aside className="hidden md:flex md:w-[var(--watts-sidebar-width)] flex-col bg-white border-r border-slate-200 fixed inset-y-0 z-10">
+        <button
+          type="button"
+          onClick={() => setIsSidebarCollapsed((value) => !value)}
+          className="absolute -right-3 top-1/2 z-30 inline-flex h-8 w-6 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:bg-brand-50 hover:text-brand-700"
+          aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!isSidebarCollapsed}
+          title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {isSidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        </button>
         <SidebarContent
           pathname={location.pathname}
           workspace={workspace}
@@ -242,6 +284,7 @@ export function RootLayout() {
           hrScope={hrScope}
           trashCount={deletedAttendanceCount}
           onSignOut={handleSignOut}
+          collapsed={isSidebarCollapsed}
         />
       </aside>
 
@@ -277,9 +320,9 @@ export function RootLayout() {
         </div>
       )}
 
-      <div className="flex-1 md:ml-64 flex flex-col min-w-0">
-        <header className="bg-white/95 backdrop-blur border-b border-slate-200 sticky top-0 z-20">
-          <div className="flex items-center justify-between gap-3 px-4 sm:px-6 h-14">
+      <div className="flex-1 md:ml-[var(--watts-sidebar-width)] flex flex-col min-w-0">
+        <header className="w-full shrink-0 bg-white/95 backdrop-blur border-b border-slate-200 sticky top-0 z-20">
+          <div className={`${APP_SHELL_HEADER_HEIGHT} flex w-full items-center justify-between gap-3 px-4 sm:px-6`}>
             <div className="flex items-center gap-3 min-w-0">
               <button
                 type="button"

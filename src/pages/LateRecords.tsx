@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAttendance, type LateRecord } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
+import { useAuth } from "../context/AuthContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { computeManualLate } from "../utils/manualLate";
 import {
@@ -38,6 +39,8 @@ function getDefaultUndertimeRange(record: LateRecord) {
 }
 
 export function LateRecords() {
+  const { role } = useAuth();
+  const readOnly = role === "Admin";
   const {
     loading,
     lateRecords,
@@ -162,9 +165,9 @@ export function LateRecords() {
       key: "name",
       header: "Employee",
       render: (record) => (
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex min-w-0 items-start gap-3">
           <EmployeeAvatar name={record.name} />
-          <span className="font-medium text-slate-900 truncate">
+          <span className="min-w-0 break-words font-medium leading-snug text-slate-900" title={record.name}>
             {record.name}
           </span>
         </div>
@@ -211,7 +214,7 @@ export function LateRecords() {
       header: "Action",
       align: "right",
       render: (record) =>
-        record.sourceType === "manual-entry" ? (
+        readOnly ? null : record.sourceType === "manual-entry" ? (
           <Button
             variant="danger"
             size="sm"
@@ -319,7 +322,7 @@ export function LateRecords() {
               </button>
             </div>
 
-            <Button
+            {!readOnly && <Button
               variant="primary"
               size="sm"
               leftIcon={<Plus className="w-4 h-4" />}
@@ -329,7 +332,7 @@ export function LateRecords() {
               }}
             >
               Add Manual Late
-            </Button>
+            </Button>}
           </div>
         }
       />

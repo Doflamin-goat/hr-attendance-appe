@@ -2,15 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarRange, Clock3, Trash2 } from "lucide-react";
 
 import { useAuth } from "../context/AuthContext";
-import { useAttendance } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 
 import {
   formatTime12Hour,
   formatTime12HourWithOptionalSeconds,
-  halfDayMatchesScope,
+  dateFilterDates,
+  dateFilterMonths,
+  dateFilterYears,
   halfDayRange,
+  matchesDateFilters,
   type HalfDayPeriod,
 } from "../utils/attendanceForms";
 
@@ -42,12 +44,14 @@ const displayDate = (value: string) =>
 export function HalfDay() {
   const { workspace, hrScope } = useAuth();
   const { activeEmployees } = useEmployees();
-  const { selectedMonthScope, selectedDayScope } = useAttendance();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("system");
   const [employee, setEmployee] = useState("");
   const [date, setDate] = useState("");
   const [period, setPeriod] = useState<HalfDayPeriod>("morning");
+  const [systemYear, setSystemYear] = useState("all");
+  const [systemMonth, setSystemMonth] = useState("all");
+  const [systemDate, setSystemDate] = useState("all");
 
   const range = useMemo(
     () => (date ? halfDayRange(date, period) : null),
@@ -88,22 +92,19 @@ export function HalfDay() {
     void refreshSavedRecords();
   }, [refreshSavedRecords]);
 
+  const systemDates = useMemo(() => savedRecords.filter((record) => record.sourceType === "attendance_upload").map((record) => record.workDate), [savedRecords]);
+  const systemYears = useMemo(() => dateFilterYears(systemDates), [systemDates]);
+  const systemMonths = useMemo(() => dateFilterMonths(systemDates, systemYear), [systemDates, systemYear]);
+  const systemExactDates = useMemo(() => dateFilterDates(systemDates, systemYear, systemMonth), [systemDates, systemYear, systemMonth]);
   const scopedRecords = useMemo(
-    () =>
-      savedRecords
-        .filter((record) =>
-          halfDayMatchesScope(
-            record.workDate,
-            selectedMonthScope,
-            selectedDayScope,
-          ),
-        )
+    () => savedRecords
+        .filter((record) => record.sourceType !== "attendance_upload" || matchesDateFilters(record.workDate, systemYear, systemMonth, systemDate))
         .sort(
           (a, b) =>
             b.workDate.localeCompare(a.workDate) ||
             (b.sourceTimeIn ?? "").localeCompare(a.sourceTimeIn ?? ""),
         ),
-    [savedRecords, selectedMonthScope, selectedDayScope],
+    [savedRecords, systemYear, systemMonth, systemDate],
   );
 
   const systemRecords = scopedRecords.filter(
@@ -226,6 +227,9 @@ export function HalfDay() {
             title="System Generated Half-Days"
             description="Upload-generated records in the current Dashboard date scope."
           />
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3"><Select label="Year" value={systemYear} onChange={(event) => { setSystemYear(event.target.value); setSystemMonth("all"); setSystemDate("all"); }}><option value="all">All Years</option>{systemYears.map((item) => <option key={item}>{item}</option>)}</Select><Select label="Month" value={systemMonth} onChange={(event) => { setSystemMonth(event.target.value); setSystemDate("all"); }}><option value="all">All Months</option>{systemMonths.map((item) => <option key={item} value={item}>{new Date(2000, Number(item) - 1, 1).toLocaleDateString("en-US", { month: "long" })}</option>)}</Select><Select label="Exact Date" value={systemDate} onChange={(event) => setSystemDate(event.target.value)}><option value="all">All Dates</option>{systemExactDates.map((item) => <option key={item} value={item}>{new Date(`${item}T00:00:00`).toLocaleDateString("en-US")}</option>)}</Select></div>
+          <p className="mt-3 text-xs font-medium text-slate-500">{systemRecords.length} record{systemRecords.length === 1 ? "" : "s"}</p>
 
           {systemRecords.length === 0 ? (
             <EmptyState

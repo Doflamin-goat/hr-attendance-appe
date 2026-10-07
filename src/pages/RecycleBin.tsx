@@ -13,6 +13,8 @@ import {
   CalendarDays,
 } from "lucide-react";
 import { useAttendance } from "../context/AttendanceContext";
+import { useAuth } from "../context/AuthContext";
+import { listDeletedServiceEvents, permanentlyDeleteServiceEvent, restoreServiceEvent, type ServiceEvent } from "../services/serviceService";
 import {
   PageHeader,
   Card,
@@ -121,6 +123,7 @@ function ReasonCell({ row }: { row: DeletedUploadedFileRow }) {
 }
 
 export function RecycleBin() {
+  const { workspace, role } = useAuth();
   const {
     deletedAttendanceData,
     deletedAttendanceLoading,
@@ -139,11 +142,16 @@ export function RecycleBin() {
   const [manualBusyId, setManualBusyId] = useState<string | null>(null);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [deleteAllBusy, setDeleteAllBusy] = useState(false);
+  const [deletedServices, setDeletedServices] = useState<ServiceEvent[]>([]);
+  const [serviceBusy, setServiceBusy] = useState<string | null>(null);
 
   useEffect(() => {
     void loadDeletedAttendanceData();
+    if (workspace && role === "HR") void listDeletedServiceEvents(workspace).then(setDeletedServices).catch(() => setDeletedServices([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [workspace, role]);
+
+  const refreshDeletedServices = async () => { if (!workspace || role !== "HR") return; setDeletedServices(await listDeletedServiceEvents(workspace)); };
 
   const handleConfirmRestore = async () => {
     if (!pending || pending.kind !== "restore") return;
@@ -455,6 +463,8 @@ export function RecycleBin() {
           />
         )}
       </Card>
+
+      {role === "HR" && <Card padded={false}><div className="px-5 py-4 border-b border-slate-200"><SectionHeader icon={<ClipboardList className="w-5 h-5" />} iconTone="brand" title="Deleted Service Records" description="Restore or permanently delete soft-deleted Service records." /></div>{deletedServices.length === 0 ? <EmptyState title="No deleted Service records" description="Deleted Service records will appear here." bordered={false} className="py-8" /> : <div className="divide-y divide-slate-100">{deletedServices.map((row) => <div key={row.id} className="flex items-center justify-between gap-4 px-5 py-4"><div className="min-w-0"><p className="font-semibold text-slate-900">{row.serviceRef}</p><p className="truncate text-sm text-slate-600">{row.client || "No client"} / {row.location || "No location"}</p><p className="text-xs text-slate-500">{row.purpose || "No service type"}</p></div><div className="flex shrink-0 gap-2"><Button size="sm" variant="primary" loading={serviceBusy === row.id} onClick={async () => { setServiceBusy(row.id); try { await restoreServiceEvent(row.id, workspace!); await refreshDeletedServices(); } finally { setServiceBusy(null); } }}>Restore</Button><Button size="sm" variant="danger" loading={serviceBusy === row.id} onClick={async () => { setServiceBusy(row.id); try { await permanentlyDeleteServiceEvent(row.id, workspace!); await refreshDeletedServices(); } finally { setServiceBusy(null); } }}>Delete Permanently</Button></div></div>)}</div>}</Card>}
 
       <ConfirmModal
         open={deleteAllOpen}
