@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarRange, Clock3, Trash2 } from "lucide-react";
 
 import { useAuth } from "../context/AuthContext";
+import { useAttendance } from "../context/AttendanceContext";
+import { MainMoveToService } from "../components/attendance/MainMoveToService";
 import { useEmployees } from "../context/EmployeesContext";
+import { listEligibleItcServices, moveItcGeneratedAttendanceToService, refreshMainServiceAttendance, type ServiceEvent } from "../services/serviceService";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 
 import {
@@ -18,8 +21,10 @@ import {
 
 import {
   createStagedHalfDay,
+  describeSupabaseError,
   deleteStagedHalfDay,
   loadStagedHalfDays,
+  restoreConvertedHalfDayToUndertime,
   type StagedHalfDayRecord,
 } from "../services/attendanceService";
 
@@ -28,6 +33,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmModal,
   EmptyState,
   PageHeader,
   SectionHeader,
@@ -42,8 +48,9 @@ const displayDate = (value: string) =>
   });
 
 export function HalfDay() {
-  const { workspace, hrScope } = useAuth();
+  const { workspace, hrScope, role } = useAuth();
   const { activeEmployees } = useEmployees();
+  const { loadDeletedAttendanceData, refreshAttendanceData } = useAttendance();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("system");
   const [employee, setEmployee] = useState("");
@@ -70,6 +77,12 @@ export function HalfDay() {
 
   const [savedRecords, setSavedRecords] = useState<StagedHalfDayRecord[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<StagedHalfDayRecord | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<StagedHalfDayRecord | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [serviceTarget, setServiceTarget] = useState<StagedHalfDayRecord | null>(null);
+  const [serviceOptions, setServiceOptions] = useState<ServiceEvent[]>([]);
+  const [selectedServiceId, setSelectedServiceId] = useState("");
 
   const refreshSavedRecords = useCallback(async () => {
     try {
@@ -78,6 +91,7 @@ export function HalfDay() {
         return;
       }
 
+      if (workspace === "WAIS" && hrScope === "MAIN" && role === "HR") await refreshMainServiceAttendance();
       const records = await loadStagedHalfDays(workspace);
       setSavedRecords(records);
     } catch {
@@ -86,19 +100,20 @@ export function HalfDay() {
         message: "Could not refresh saved half-day records.",
       });
     }
-  }, [workspace]);
+  }, [workspace, hrScope, role]);
 
   useEffect(() => {
     void refreshSavedRecords();
   }, [refreshSavedRecords]);
 
-  const systemDates = useMemo(() => savedRecords.filter((record) => record.sourceType === "attendance_upload").map((record) => record.workDate), [savedRecords]);
+  const isSystemGenerated = (record: StagedHalfDayRecord) => record.sourceType === "attendance_upload" || record.sourceType === "system_generated";
+  const systemDates = useMemo(() => savedRecords.filter(isSystemGenerated).map((record) => record.workDate), [savedRecords]);
   const systemYears = useMemo(() => dateFilterYears(systemDates), [systemDates]);
   const systemMonths = useMemo(() => dateFilterMonths(systemDates, systemYear), [systemDates, systemYear]);
   const systemExactDates = useMemo(() => dateFilterDates(systemDates, systemYear, systemMonth), [systemDates, systemYear, systemMonth]);
   const scopedRecords = useMemo(
     () => savedRecords
-        .filter((record) => record.sourceType !== "attendance_upload" || matchesDateFilters(record.workDate, systemYear, systemMonth, systemDate))
+        .filter((record) => !isSystemGenerated(record) || matchesDateFilters(record.workDate, systemYear, systemMonth, systemDate))
         .sort(
           (a, b) =>
             b.workDate.localeCompare(a.workDate) ||
@@ -107,9 +122,7 @@ export function HalfDay() {
     [savedRecords, systemYear, systemMonth, systemDate],
   );
 
-  const systemRecords = scopedRecords.filter(
-    (record) => record.sourceType === "attendance_upload",
-  );
+  const systemRecords = scopedRecords.filter(isSystemGenerated);
 
   const manualRecords = scopedRecords.filter(
     (record) => record.sourceType === "manual",
@@ -157,17 +170,19 @@ export function HalfDay() {
 
     try {
       await deleteStagedHalfDay(id);
-      await refreshSavedRecords();
+      await Promise.all([refreshSavedRecords(), loadDeletedAttendanceData()]);
 
       setFeedback({
         type: "success",
         message: "Half-day record moved to Recycle Bin.",
       });
-    } catch {
+      return true;
+    } catch (error) {
       setFeedback({
         type: "error",
-        message: "Could not delete the half-day record.",
+        message: error instanceof Error ? error.message : "Could not delete the half-day record.",
       });
+      return false;
     } finally {
       setDeletingId(null);
     }
@@ -176,6 +191,28 @@ export function HalfDay() {
   const employeeName = (record: StagedHalfDayRecord) =>
     activeEmployees.find((item) => item.id === record.employeeId)?.fullName ??
     record.employeeName;
+
+  const openMoveToService = async (record: StagedHalfDayRecord) => {
+    if (hrScope !== "ITC" || role !== "HR") return;
+    try { const options = await listEligibleItcServices(record.employeeId, record.workDate); setServiceOptions(options); setSelectedServiceId(options[0]?.id ?? ""); setServiceTarget(record); } catch { setFeedback({ type: "error", message: "Could not load eligible Service records." }); }
+  };
+
+  const restoreConversion = async () => {
+    if (!restoreTarget || !restoreTarget.canRestoreToUndertime) return;
+    const target = restoreTarget;
+    setRestoringId(target.id);
+    setFeedback(null);
+    try {
+      await restoreConvertedHalfDayToUndertime(target.id);
+      await Promise.all([refreshSavedRecords(), refreshAttendanceData(), loadDeletedAttendanceData()]);
+      setRestoreTarget(null);
+      setFeedback({ type: "success", message: "Original generated Undertime restored." });
+    } catch (error) {
+      setFeedback({ type: "error", message: describeSupabaseError(error) });
+    } finally {
+      setRestoringId(null);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -225,7 +262,7 @@ export function HalfDay() {
             icon={<Clock3 className="h-5 w-5" />}
             iconTone="brand"
             title="System Generated Half-Days"
-            description="Upload-generated records in the current Dashboard date scope."
+            description="System- and upload-generated classifications in the current Dashboard date scope."
           />
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3"><Select label="Year" value={systemYear} onChange={(event) => { setSystemYear(event.target.value); setSystemMonth("all"); setSystemDate("all"); }}><option value="all">All Years</option>{systemYears.map((item) => <option key={item}>{item}</option>)}</Select><Select label="Month" value={systemMonth} onChange={(event) => { setSystemMonth(event.target.value); setSystemDate("all"); }}><option value="all">All Months</option>{systemMonths.map((item) => <option key={item} value={item}>{new Date(2000, Number(item) - 1, 1).toLocaleDateString("en-US", { month: "long" })}</option>)}</Select><Select label="Exact Date" value={systemDate} onChange={(event) => setSystemDate(event.target.value)}><option value="all">All Dates</option>{systemExactDates.map((item) => <option key={item} value={item}>{new Date(`${item}T00:00:00`).toLocaleDateString("en-US")}</option>)}</Select></div>
@@ -260,6 +297,12 @@ export function HalfDay() {
                     </div>
 
                     <Badge tone="info">System Generated</Badge>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    {isSystemGenerated(record) && <MainMoveToService type="half_day" recordId={record.id} onMoved={refreshSavedRecords} />}
+                    {hrScope === "ITC" && role === "HR" && record.sourceType === "attendance_upload" && <Button size="sm" variant="secondary" onClick={() => void openMoveToService(record)}>Move to Service</Button>}
+                    {workspace === "APP" && hrScope === "ITC" && role === "HR" && record.canRestoreToUndertime && <Button size="sm" variant="secondary" disabled={restoringId === record.id} onClick={() => setRestoreTarget(record)}>Restore to Undertime</Button>}
+                    {workspace === "APP" && hrScope === "ITC" && role === "HR" && record.sourceType === "system_generated" && <Button size="sm" variant="danger" disabled={deletingId === record.id} onClick={() => setDeleteTarget(record)}>Delete</Button>}
                   </div>
 
                   <dl className="mt-4 grid gap-2 text-sm">
@@ -302,7 +345,9 @@ export function HalfDay() {
                       </dt>
 
                       <dd className="break-words text-slate-700">
-                        {record.sourceFileName || "Attendance upload"}
+                        {record.sourceType === "system_generated" && record.sourceGeneratedUndertimeId
+                          ? `From Generated Undertime #${record.sourceGeneratedUndertimeId}`
+                          : record.sourceFileName || "Attendance upload"}
                       </dd>
                     </div>
                   </dl>
@@ -482,6 +527,10 @@ export function HalfDay() {
           </Card>
         </>
       )}
+
+      {serviceTarget && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><Card className="w-full max-w-lg"><SectionHeader title="Move to Service" description={`${employeeName(serviceTarget)} — ${displayDate(serviceTarget.workDate)}`} />{serviceOptions.length === 0 ? <p className="mt-4 text-sm text-slate-600">No eligible Service record was found for this employee and date.</p> : <Select className="mt-4" label="Eligible Service" value={selectedServiceId} onChange={(event) => setSelectedServiceId(event.target.value)}>{serviceOptions.map((event) => <option key={event.id} value={event.id}>{event.serviceRef} — {new Date(event.serviceStart).toLocaleString()} to {event.serviceEnd ? new Date(event.serviceEnd).toLocaleString() : "In Service"}</option>)}</Select>}<div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => setServiceTarget(null)}>Cancel</Button>{serviceOptions.length > 0 && <Button onClick={async () => { try { await moveItcGeneratedAttendanceToService("half_day", serviceTarget.id, selectedServiceId); setServiceTarget(null); await refreshSavedRecords(); setFeedback({ type: "success", message: "Generated Half-Day reconciled with Service." }); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Could not move Half-Day to Service." }); } }}>Move to Service</Button>}</div></Card></div>}
+      <ConfirmModal open={Boolean(deleteTarget)} tone="danger" title="Delete Half-Day Record?" description={deleteTarget ? <div><p className="font-semibold">{employeeName(deleteTarget)}</p><p>{displayDate(deleteTarget.workDate)} · {deleteTarget.absentPeriod === "morning" ? "Morning" : "Afternoon"} Half-Day</p><p className="mt-3">This record will be moved to the Recycle Bin. Its source Undertime will remain deleted.</p></div> : null} confirmLabel="Delete" loading={Boolean(deleteTarget && deletingId === deleteTarget.id)} onConfirm={async () => { if (!deleteTarget) return; if (await remove(deleteTarget.id)) setDeleteTarget(null); }} onCancel={() => { if (!deletingId) setDeleteTarget(null); }} />
+      <ConfirmModal open={Boolean(restoreTarget)} tone="primary" title="Restore to Undertime?" description={restoreTarget ? <div><p className="font-semibold">{employeeName(restoreTarget)}</p><p>{displayDate(restoreTarget.workDate)}</p><p className="mt-3">This will remove the converted Half-Day and return the original System Generated Undertime record.</p></div> : null} confirmLabel="Restore to Undertime" loading={Boolean(restoreTarget && restoringId === restoreTarget.id)} onConfirm={() => void restoreConversion()} onCancel={() => { if (!restoringId) setRestoreTarget(null); }} />
     </div>
   );
 }

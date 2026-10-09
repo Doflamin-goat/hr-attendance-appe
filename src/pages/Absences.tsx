@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAttendance } from "../context/AttendanceContext";
+import { MainMoveToService } from "../components/attendance/MainMoveToService";
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { EmployeeFilterCombobox } from "../components/employees/EmployeeFilterCombobox";
@@ -386,6 +387,7 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
                         <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
                           <Badge tone="danger">Absent</Badge>
                           <Badge tone="neutral">{record.sourceType === "system_generated" ? "System Generated" : "Manual Entry"}</Badge>
+                          {!readOnly && record.sourceType === "system_generated" && <MainMoveToService type="absence" recordId={record.id} />}
                           {!readOnly && hrScope === "MAIN" && record.sourceType === "system_generated" && <><Button variant="secondary" size="sm" leftIcon={<Pencil className="w-3.5 h-3.5" />} onClick={() => { setEditTarget(record); setEditReason(record.reason); setEditInformed(record.informed ?? []); }}>Edit</Button><Button
                             variant="danger"
                             size="sm"

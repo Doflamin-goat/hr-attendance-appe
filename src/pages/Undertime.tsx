@@ -6,6 +6,8 @@ import { useAuth } from "../context/AuthContext";
 import { attendanceRecordRange, dateFilterDates, dateFilterMonths, dateFilterYears, formatDuration, formatTime12Hour, matchesDateFilters } from "../utils/attendanceForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
 import { checkoutUndertimeMinutes } from "../utils/mainAttendance";
+import { listEligibleItcServices, moveItcGeneratedAttendanceToService, type ServiceEvent } from "../services/serviceService";
+import { MainMoveToService } from "../components/attendance/MainMoveToService";
 import {
   Clock3,
   Plus,
@@ -59,9 +61,10 @@ export function Undertime() {
     removeManualUndertimeAdjustment,
     deleteManualUndertime,
     updateGeneratedUndertimeDetails,
+    moveGeneratedUndertimeToHalfDay,
   } = useAttendance();
   const { activeEmployees } = useEmployees();
-  const { hrScope } = useAuth();
+  const { hrScope, role } = useAuth();
 
   const [activeTab, setActiveTab] = useState<"system" | "manual">("manual");
   const [employeeName, setEmployeeName] = useState("");
@@ -84,6 +87,10 @@ export function Undertime() {
   const [editTarget, setEditTarget] = useState<GeneratedUndertime | null>(null);
   const [editReason, setEditReason] = useState("");
   const [editInformed, setEditInformed] = useState<string[]>([]);
+  const [halfDayTarget, setHalfDayTarget] = useState<GeneratedUndertime | null>(null);
+  const [serviceTarget, setServiceTarget] = useState<GeneratedUndertime | null>(null);
+  const [serviceOptions, setServiceOptions] = useState<ServiceEvent[]>([]);
+  const [selectedServiceId, setSelectedServiceId] = useState("");
   const matchingLateRecords = useMemo(() => allLateRecords.filter((record) => {
     const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
     const recordDate = record.workDate ?? new Date(record.date).toLocaleDateString("en-CA");
@@ -227,6 +234,10 @@ export function Undertime() {
     if (result.success) setEditTarget(null);
   };
 
+  const openMoveToService = async (record: GeneratedUndertime) => {
+    try { const options = await listEligibleItcServices(record.employeeId ?? "", new Date(record.date).toLocaleDateString("en-CA")); setServiceOptions(options); setSelectedServiceId(options[0]?.id ?? ""); setServiceTarget(record); } catch { setFeedback({ type: "error", message: "Could not load eligible Service records." }); }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -309,8 +320,8 @@ export function Undertime() {
                       Source: {record.sourceFileName}
                     </p>
                     <div className="mt-3 flex items-center justify-between gap-3">
-                      <div className="min-w-0 text-xs text-slate-600"><p>{record.reason || "No remarks recorded."}</p>{record.informed?.length ? <p className="mt-1">Informed: {record.informed.join(", ")}</p> : null}</div>
-                      {hrScope === "ITC" && <Button size="sm" variant="secondary" leftIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openGeneratedEdit(record)}>Edit Details</Button>}
+                      <div className="min-w-0 text-xs text-slate-600"><p>{record.reason || "No remarks recorded."}</p>{record.informed?.length ? <p className="mt-1">Informed: {record.informed.join(", ")}</p> : null}</div>{/* hrScope === "ITC" && <Button */}
+                      {role === "HR" && <div className="flex flex-wrap justify-end gap-2"><MainMoveToService type="undertime" recordId={record.id} />{hrScope === "ITC" && <><Button size="sm" variant="secondary" leftIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openGeneratedEdit(record)}>Edit Details</Button><Button size="sm" variant="secondary" onClick={() => void openMoveToService(record)}>Move to Service</Button></>}{(hrScope === "ITC" || hrScope === "MAIN") && <Button size="sm" variant="primary" onClick={() => setHalfDayTarget(record)}>Move to Half-Day</Button>}</div>}
                     </div>
                   </li>
                 ))}
@@ -500,6 +511,18 @@ export function Undertime() {
           </Card>
         </div>
       )}
+
+      <ConfirmModal
+        open={!!halfDayTarget}
+        tone="warning"
+        title="Move to Half-Day?"
+        description={halfDayTarget ? <><strong>{halfDayTarget.name}</strong><br />{halfDayTarget.date}<br /><br />Current Undertime: {formatTime12Hour(halfDayTarget.timeIn)}<br /><br />This will move this system-generated Undertime record to Half-Day.</> : null}
+        confirmLabel="Move to Half-Day"
+        onConfirm={async () => { if (!halfDayTarget) return; const result = await moveGeneratedUndertimeToHalfDay(halfDayTarget.id); setFeedback({ type: result.success ? "success" : "error", message: result.message }); if (result.success) setHalfDayTarget(null); }}
+        onCancel={() => setHalfDayTarget(null)}
+      />
+
+      <ConfirmModal open={!!serviceTarget} tone="warning" title="Move to Service?" description={serviceTarget ? serviceOptions.length === 0 ? "No eligible Service record was found for this employee and date." : <div className="space-y-3"><p><strong>{serviceTarget.name}</strong><br />{serviceTarget.date}</p><Select label="Eligible Service" value={selectedServiceId} onChange={(event) => setSelectedServiceId(event.target.value)}>{serviceOptions.map((event) => <option key={event.id} value={event.id}>{event.serviceRef} — {new Date(event.serviceStart).toLocaleString()} to {event.serviceEnd ? new Date(event.serviceEnd).toLocaleString() : "In Service"}</option>)}</Select></div> : null} confirmLabel={serviceOptions.length === 0 ? "Close" : "Move to Service"} onConfirm={async () => { if (!serviceTarget) return; if (!selectedServiceId) { setServiceTarget(null); return; } try { await moveItcGeneratedAttendanceToService("undertime", serviceTarget.id, selectedServiceId); setServiceTarget(null); setFeedback({ type: "success", message: "Generated Undertime reconciled with Service." }); window.location.reload(); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Could not move Undertime to Service." }); } }} onCancel={() => setServiceTarget(null)} />
 
       <ConfirmModal
         open={confirmDeleteMonth}

@@ -57,6 +57,202 @@ test("ITC leave submission reserves pending minutes without changing approved ar
   assert.doesNotMatch(migration, /update public\.employee_leave_adjustments/);
 });
 
+test("Service edit timestamp round-trip preserves Manila wall time and seconds without drift", () => {
+  const service = readFileSync(new URL("../src/services/serviceService.ts", import.meta.url), "utf8");
+  assert.match(service, /timeZone: "Asia\/Manila"/);
+  assert.match(service, /Date\.UTC\(Number\(year\), Number\(month\) - 1, Number\(day\), Number\(hour\), Number\(minute\), Number\(second\)\)/);
+  assert.match(service, /local\.getTime\(\) - 8 \* 60 \* 60 \* 1000/);
+  assert.match(service, /second: "2-digit"/);
+  // Verify the fixed Manila offset conversion, including the no-drift boundary timestamp.
+  assert.equal(new Date(Date.UTC(2026, 9, 8, 13, 5, 46) - 8 * 60 * 60 * 1000).toISOString(), "2026-10-08T05:05:46.000Z");
+});
+
+test("ITC Service candidates are not restricted to pre-existing employee membership", () => {
+  const source = readFileSync(new URL("../src/services/serviceService.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/052_fix_itc_service_time_cast_and_lookup.sql", import.meta.url), "utf8");
+  assert.match(source, /event\.serviceStart\.slice\(0, 10\) <= workDate/);
+  assert.doesNotMatch(source, /employeeIds\.includes\(employeeId\)/);
+  assert.match(migration, /on conflict\(service_event_id,employee_id\) do nothing/);
+  assert.match(migration, /perform public\.reconcile_itc_service_attendance\(ev\.id\)/);
+  assert.match(migration, /service_end \+ interval '10 minutes'/);
+  assert.match(migration, /source_type = 'attendance_upload'/);
+});
+
+test("ITC Service attendance reverses and transfers tracked effects on coverage or membership changes", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/052_fix_itc_service_time_cast_and_lookup.sql", import.meta.url), "utf8");
+  assert.match(migration, /public\.itc_service_attendance_effects/);
+  assert.match(readFileSync(new URL("../supabase/migrations/050_itc_service_attendance_reconciliation.sql", import.meta.url), "utf8"), /half_day_id uuid references public\.half_day_records\(id\)/);
+  assert.match(readFileSync(new URL("../supabase/migrations/050_itc_service_attendance_reconciliation.sql", import.meta.url), "utf8"), /undertime_id bigint references public\.generated_undertimes\(id\)/);
+  assert.match(migration, /after insert or delete on public\.service_event_employees/);
+  assert.match(migration, /trg_reconcile_itc_service_event_change after insert or update of service_start,service_end,status,is_deleted/);
+  assert.match(migration, /perform public\.reconcile_itc_service_attendance\(event_row\.id\);[\s\S]*?update public\.service_events set is_deleted=true/);
+  assert.match(migration, /range_agg\(tstzrange\(s\.service_start,s\.service_end \+ interval '10 minutes','\[\]'\)\)/);
+  assert.match(migration, /supporting_service_id/);
+  assert.match(migration, /insert into public\.itc_service_attendance_effects\(service_event_id,employee_id,work_date,(?:half_day_id|undertime_id)\) values\(supporting_service_id/);
+  assert.match(migration, /deleted_reason='reconciled_by_itc_service'/);
+  assert.match(migration, /source_type = 'attendance_upload'/);
+  assert.match(migration, /workspace = 'APP'/);
+  assert.match(migration, /Only APP HR can reconcile ITC Service attendance/);
+  assert.doesNotMatch(migration, /public\.manual_undertimes|source_type\s*=\s*'manual'/i);
+  assert.match(migration, /public\.reconcile_main_service_attendance\(event_row\.id,false\)/);
+});
+
+test("053 resolves legacy APP Undertime identity exactly and preserves the reversible Service path", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/053_fix_itc_legacy_generated_attendance_reconciliation.sql", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/serviceService.ts", import.meta.url), "utf8");
+  const undertimePage = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
+  const halfDaySchema = readFileSync(new URL("../supabase/migrations/006_staging_only_attendance_workflows.sql", import.meta.url), "utf8");
+  assert.match(migration, /u\.workspace='APP' and u\.employee_id is null and not u\.is_deleted/);
+  assert.match(migration, /e\.hr_scope='ITC'/);
+  assert.match(migration, /having count\(distinct e\.id\)=1/);
+  assert.match(migration, /public\.employee_name_key\(e\.full_name\)=public\.employee_name_key\(u\.employee_name\)/);
+  assert.match(migration, /public\.employee_name_key\(e\.attendance_name\)=public\.employee_name_key\(u\.employee_name\)/);
+  assert.match(migration, /Generated Undertime employee identity is ambiguous/);
+  assert.match(migration, /status in \('in_service','completed'\)/);
+  assert.match(migration, /on conflict\(service_event_id,employee_id\) do nothing/);
+  assert.match(migration, /public\.reconcile_itc_service_attendance\(event_row\.id\)/);
+  assert.match(migration, /revoke all on function public\.move_itc_generated_attendance_to_service/);
+  assert.match(service, /No matching employee could be resolved for this generated Undertime/);
+  assert.match(service, /Selected Service does not cover this attendance record/);
+  assert.doesNotMatch(undertimePage, /No matching active employee was found for this record/);
+  assert.match(halfDaySchema, /employee_id uuid not null references public\.employees\(id\)/);
+  assert.match(readFileSync(new URL("../supabase/migrations/052_fix_itc_service_time_cast_and_lookup.sql", import.meta.url), "utf8"), /service_end \+ interval '10 minutes'/);
+  assert.match(readFileSync(new URL("../supabase/migrations/052_fix_itc_service_time_cast_and_lookup.sql", import.meta.url), "utf8"), /else perform public\.reconcile_itc_service_attendance\(p_id\)/);
+  assert.doesNotMatch(migration, /public\.reconcile_main_service_attendance|workspace='WAIS'/);
+});
+
+test("054 canonicalizes 12-hour ITC clock text before the reversible reconciler", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/054_fix_itc_legacy_time_parsing.sql", import.meta.url), "utf8");
+  const legacyReconciler = readFileSync(new URL("../supabase/migrations/052_fix_itc_service_time_cast_and_lookup.sql", import.meta.url), "utf8");
+  const canonicalClock = (input: string | null) => {
+    const match = input?.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+    if (!match) return null;
+    let hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const second = Number(match[3] ?? 0);
+    const meridiem = match[4]?.toUpperCase();
+    if (minute > 59 || second > 59) return null;
+    if (meridiem) {
+      if (hour < 1 || hour > 12) return null;
+      hour = (hour % 12) + (meridiem === "PM" ? 12 : 0);
+    } else if (hour > 23) return null;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
+  };
+  for (const [input, expected] of [
+    ["13:05:46", "13:05:46"], ["1:05:46 PM", "13:05:46"], ["1:05 PM", "13:05:00"],
+    ["8:00 AM", "08:00:00"], ["08:00:00", "08:00:00"], [" 01:05:46 pm ", "13:05:46"],
+  ] as const) assert.equal(canonicalClock(input), expected);
+  for (const invalid of [null, "", "unknown", "13:05 PM", "1:99 PM", "1:05:99 PM"]) assert.equal(canonicalClock(invalid), null);
+
+  assert.match(migration, /create or replace function public\.parse_itc_clock_time\(p_value text\)/);
+  assert.match(migration, /regexp_match\(btrim\(p_value\).*AM\|PM/);
+  assert.match(migration, /hour_value:=hour_value % 12/);
+  assert.match(migration, /public\.parse_itc_clock_time\(u\.time_in\)/);
+  assert.match(migration, /rename to reconcile_itc_service_attendance_053/);
+  assert.match(migration, /reconcile_itc_service_attendance_053\(p_event_id\)/);
+  assert.match(migration, /before insert or update of time_in on public\.generated_undertimes/);
+  assert.match(legacyReconciler, /service_end \+ interval '10 minutes'/);
+  assert.equal(13 * 3600 + 5 * 60 + 46 <= 13 * 3600 + 10 * 60, true, "1:05:46 PM is within 10 minutes of a 1 PM Service end");
+});
+
+test("055 resolves attendance endpoints before aggregating Service coverage", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/055_fix_itc_service_coverage_aggregation.sql", import.meta.url), "utf8");
+  assert.match(migration, /select public\.parse_itc_clock_time\(u\.time_in\) into parsed_time/);
+  assert.match(migration, /select coalesce\(h\.source_time_in,time '13:05:46'\) into parsed_time/);
+  assert.match(migration, /range_agg\(tstzrange\(s\.service_start,s\.service_end\+interval '10 minutes','\[\]'\)\)/);
+  assert.match(migration, /effect_row\.work_date\+parsed_time/);
+  assert.match(migration, /undertime_row\.work_date\+parsed_time/);
+  assert.doesNotMatch(migration, /range_agg\([\s\S]{0,500}u\.time_in/);
+  assert.doesNotMatch(migration, /range_agg\([\s\S]{0,500}h\.source_time_in/);
+  assert.match(migration, /parse_itc_clock_time\(undertime_row\.time_in\)/);
+  assert.match(migration, /status in \('in_service','completed'\)/);
+  assert.match(migration, /deleted_reason='reconciled_by_itc_service'/);
+  assert.match(migration, /restored_at=now\(\)/);
+  assert.doesNotMatch(migration, /public\.reconcile_main_service_attendance|workspace='WAIS'/);
+});
+
+test("056 reconciles APP Service edits once after final memberships and refreshes attendance data", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/056_fix_itc_service_save_reconciliation.sql", import.meta.url), "utf8");
+  const servicePage = readFileSync(new URL("../src/pages/Service.tsx", import.meta.url), "utf8");
+  const updateRpc = migration.slice(migration.indexOf("create or replace function public.update_service_event"), migration.indexOf("create or replace function public.reconcile_itc_service_membership_change"));
+  const membershipTrigger = migration.slice(migration.indexOf("create or replace function public.reconcile_itc_service_membership_change"));
+  assert.ok(updateRpc.indexOf("set_config('watts.itc_service_reconcile','1',true)") < updateRpc.indexOf("update public.service_events"));
+  assert.ok(updateRpc.indexOf("delete from public.service_event_employees") < updateRpc.indexOf("insert into public.service_event_employees"));
+  assert.ok(updateRpc.indexOf("insert into public.service_event_employees") < updateRpc.indexOf("perform public.reconcile_itc_service_attendance(p_id)"));
+  assert.match(membershipTrigger, /current_setting\('watts\.itc_service_reconcile',true\) is distinct from '1'/);
+  assert.match(membershipTrigger, /if event_workspace='APP'/);
+  assert.match(updateRpc, /if p_workspace='WAIS' then[\s\S]*?service_validate_overlap[\s\S]*?reconcile_main_service_attendance\(p_id,true\)/);
+  assert.match(servicePage, /Promise\.all\(\[refresh\(\), refreshAttendanceData\(\)\]\)/);
+});
+
+test("057 converts BIGINT Undertime to a linked morning Half-Day and protects its recycle lifecycle", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/057_fix_itc_halfday_conversion_and_recycle_bin.sql", import.meta.url), "utf8");
+  const attendance = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const halfDayPage = readFileSync(new URL("../src/pages/HalfDay.tsx", import.meta.url), "utf8");
+  const recyclePage = readFileSync(new URL("../src/pages/RecycleBin.tsx", import.meta.url), "utf8");
+  const context = readFileSync(new URL("../src/context/AttendanceContext.tsx", import.meta.url), "utf8");
+  assert.match(migration, /move_generated_undertime_to_half_day\(p_id bigint\)/);
+  assert.match(migration, /where id=p_id and workspace='APP' and not is_deleted/);
+  assert.match(migration, /attendance_hr_scope\(\) is distinct from 'ITC'/);
+  assert.match(migration, /parse_itc_clock_time\(undertime_row\.time_in\)/);
+  assert.match(migration, /undertime_row\.work_date,'morning'/);
+  assert.match(migration, /schedule_start:=time '08:00'[\s\S]*?schedule_end:=time '12:00'/);
+  assert.match(migration, /auth\.uid\(\),'system_generated'/);
+  assert.match(migration, /source_generated_undertime_id,source_file_id_text/);
+  assert.match(migration, /deleted_reason='reclassified_as_half_day'/);
+  assert.match(migration, /A Half-Day record already exists for this employee and date\./);
+  assert.match(migration, /deleted_reason='half_day_deleted'/);
+  assert.match(migration, /set is_deleted=false,deleted_at=null,deleted_by=null,deleted_reason=null/);
+  assert.match(migration, /if exists \([\s\S]*?h\.work_date=half_day_row\.work_date and not h\.is_deleted[\s\S]*?A Half-Day record already exists/);
+  assert.match(migration, /revoke all on function public\.move_generated_undertime_to_half_day\(bigint\)/);
+  assert.match(migration, /grant execute on function public\.move_generated_undertime_to_half_day\(bigint\)/);
+  assert.match(migration, /create trigger trg_guard_itc_generated_half_day_delete[\s\S]*?before delete on public\.half_day_records/);
+  assert.doesNotMatch(migration, /move_generated_undertime_to_half_day\(p_id uuid\)/);
+  assert.match(attendance, /p_id: id/);
+  assert.match(attendance, /sourceType: item\.source_type === "attendance_upload" \|\| item\.source_type === "system_generated"/);
+  assert.match(attendance, /From Generated Undertime #\$\{item\.source_generated_undertime_id\}/);
+  assert.match(halfDayPage, /record\.sourceType === "system_generated"/);
+  assert.match(halfDayPage, /record\.sourceType === "attendance_upload" && <Button/);
+  assert.match(halfDayPage, /Delete Half-Day Record\?/);
+  assert.match(halfDayPage, /loadDeletedAttendanceData\(\)/);
+  assert.match(recyclePage, /Period \/ Source/);
+  assert.match(recyclePage, /Deleted By/);
+  assert.match(context, /Promise\.all\(\[applyDatabaseData\(false\), refreshDeletedAttendanceData\(false\)\]\)/);
+});
+
+test("058 atomically reverses only linked APP/ITC conversions and preserves recycle semantics", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/058_complete_itc_halfday_conversion_reversal.sql", import.meta.url), "utf8");
+  const attendance = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const halfDayPage = readFileSync(new URL("../src/pages/HalfDay.tsx", import.meta.url), "utf8");
+  const recyclePage = readFileSync(new URL("../src/pages/RecycleBin.tsx", import.meta.url), "utf8");
+  assert.match(migration, /restore_converted_half_day_to_undertime\(p_half_day_id uuid\)/);
+  assert.match(migration, /attendance_workspace\(\) is distinct from 'APP'[\s\S]*attendance_hr_scope\(\) is distinct from 'ITC'/);
+  assert.match(migration, /source_generated_undertime_id::bigint/);
+  assert.match(migration, /generated_undertimes[\s\S]*?where id=source_id and workspace='APP'[\s\S]*?for update/);
+  assert.match(migration, /An active generated Undertime already exists/);
+  assert.match(migration, /A Manual Undertime already exists/);
+  assert.ok(migration.indexOf("set is_deleted=false,deleted_at=null,deleted_by=null,deleted_reason=null") < migration.indexOf("set is_deleted=true,deleted_at=now(),deleted_by=auth.uid(),"));
+  assert.match(migration, /deleted_reason='conversion_reversed_to_undertime'/);
+  assert.match(migration, /removed_from_recycle_bin=true/);
+  assert.match(migration, /perform public\.reconcile_itc_service_attendance\(service_id\)/);
+  assert.match(migration, /grant execute on function public\.restore_converted_half_day_to_undertime\(uuid\) to authenticated/);
+  assert.match(attendance, /canRestoreToUndertime: record\.sourceType === "system_generated"/);
+  assert.match(attendance, /From Generated Undertime #\$\{item\.source_generated_undertime_id\}/);
+  assert.match(attendance, /restore_converted_half_day_to_undertime/);
+  assert.match(halfDayPage, /record\.canRestoreToUndertime/);
+  assert.match(halfDayPage, /Restore to Undertime\?/);
+  assert.match(halfDayPage, /refreshSavedRecords\(\), refreshAttendanceData\(\), loadDeletedAttendanceData\(\)/);
+  assert.match(recyclePage, /workspace === "APP" && hrScope === "ITC" && role === "HR"/);
+  assert.match(recyclePage, /workspace === "WAIS" && hrScope === "MAIN" && role === "HR"/);
+  assert.match(recyclePage, /min-w-\[1260px\]/);
+  assert.match(recyclePage, /w-\[290px\]/);
+  assert.match(recyclePage, /whitespace-pre-line break-words/);
+  assert.match(recyclePage, /min-w-max flex-nowrap/);
+  assert.match(halfDayPage, /record\.sourceType === "attendance_upload" && <Button/);
+  assert.match(attendance, /restore_half_day/);
+  assert.doesNotMatch(migration, /public\.reconcile_main_service_attendance|workspace='WAIS'/);
+});
+
 test("generated undertime details edit preserves generated identity and immutable fields", () => {
   const page = readFileSync(new URL("../src/pages/Undertime.tsx", import.meta.url), "utf8");
   const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
@@ -785,8 +981,7 @@ test("global footer and public information routes expose no fake support link", 
   assert.match(routes, /path: "\/about"/);
   assert.match(routes, /path: "\/privacy"/);
   assert.match(routes, /path: "\/contact"/);
-  assert.match(footer, /Support this project/);
-  assert.match(footer, /Buy me a coffee/);
+  assert.doesNotMatch(footer, /Support this project|Buy me a coffee|SUPPORT_URL/);
   assert.match(footer, /to="\/privacy"/);
   assert.match(branding, /SUPPORT_URL: string \| null = null/);
   assert.match(layout, /<AppFooter compact/);

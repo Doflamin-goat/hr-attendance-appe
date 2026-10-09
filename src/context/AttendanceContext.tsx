@@ -11,6 +11,7 @@ import ExcelJS from "exceljs";
 import { computeExcelColumnWidth, sortAttendanceDetailRecords, toExcelCalendarDate } from "../utils/exportRows";
 import { useAuth } from "./AuthContext";
 import { useEmployees } from "./EmployeesContext";
+import { refreshMainServiceAttendance } from "../services/serviceService";
 import {
   clearWorkspaceAttendanceData,
   createDeleteBatchId,
@@ -35,6 +36,7 @@ import {
   saveMemoReads,
   saveUploadedAttendanceFile,
   updateGeneratedUndertimeDetails,
+  moveGeneratedUndertimeToHalfDay,
   type DeletedAttendanceData,
   type DeletedManualHrType,
   loadMainDailyAttendance,
@@ -139,6 +141,16 @@ export interface Exemption {
   lateRestoredBy?: string;
   sourceType?: "individual" | "date_rule";
   dateRuleId?: string;
+  pictures?: ExemptionPicture[];
+}
+
+export interface ExemptionPicture {
+  id: string;
+  fileName: string;
+  storagePath: string;
+  contentType: string;
+  sizeBytes: number;
+  url?: string;
 }
 
 export interface AbsentRecord {
@@ -249,6 +261,7 @@ interface AttendanceState {
   deleteMainSystemGeneratedAbsence: (id: string) => Promise<{ success: boolean; message: string }>;
   deleteManualUndertime: (id: string) => Promise<{ success: boolean; message: string }>;
   updateGeneratedUndertimeDetails: (id: string, reason: string, informed: string[]) => Promise<{ success: boolean; message: string }>;
+  moveGeneratedUndertimeToHalfDay: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Manual late records (migration 005)
   manualLateRecords: ManualLateRecord[];
@@ -420,6 +433,10 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
 
   const applyDatabaseData = async (loadFilterState = false) => {
     if (!workspace) return;
+
+    if (workspace === "WAIS" && hrScope === "MAIN" && role === "HR") {
+      await refreshMainServiceAttendance();
+    }
 
     const [dbData, manualLates, mainDaily] = await Promise.all([
       loadAttendanceData(workspace),
@@ -1215,6 +1232,17 @@ export const AttendanceProvider = ({ children }: { children: ReactNode }) => {
       await updateGeneratedUndertimeDetails(id, reason, informed);
       await applyDatabaseData(false);
       return { success: true, message: "System generated undertime details updated." };
+    } catch (error) {
+      return { success: false, message: describeSupabaseError(error) };
+    }
+  };
+
+  const convertGeneratedUndertime = async (id: string) => {
+    if (role !== "HR" || !workspace) return { success: false, message: "Only scoped HR can convert system-generated undertime." };
+    try {
+      await moveGeneratedUndertimeToHalfDay(id);
+      await Promise.all([applyDatabaseData(false), refreshDeletedAttendanceData(false)]);
+      return { success: true, message: "Undertime moved to Half-Day successfully." };
     } catch (error) {
       return { success: false, message: describeSupabaseError(error) };
     }
@@ -2188,6 +2216,7 @@ const getTeam = (name: string) => {
         deleteMainSystemGeneratedAbsence: deleteMainGeneratedAbsence,
         deleteManualUndertime,
         updateGeneratedUndertimeDetails: editGeneratedUndertimeDetails,
+        moveGeneratedUndertimeToHalfDay: convertGeneratedUndertime,
 
         manualLateRecords: manualLateRecordsState,
         addManualLate,

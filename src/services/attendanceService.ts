@@ -1,9 +1,10 @@
 import { supabase } from "../lib/supabase";
 import { formatOptionalReportedTime } from "../utils/exemptionForms";
-import { sortUploadedAttendanceFiles } from "../utils/attendanceForms";
+import { formatTime12Hour, sortUploadedAttendanceFiles } from "../utils/attendanceForms";
 import type {
   AbsentRecord,
   Exemption,
+  ExemptionPicture,
   GeneratedHalfDay,
   GeneratedUndertime,
   LateRecord,
@@ -29,6 +30,7 @@ export type DateExemptionRule = {
 };
 
 const ATTENDANCE_STORAGE_BUCKET = "attendance-files";
+const EXEMPTION_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 function rowId(value: unknown) {
   return String(value ?? "");
@@ -721,10 +723,11 @@ export type StagedHalfDayRecord = {
   scheduledStart: string;
   scheduledEnd: string;
   reason: string;
-  sourceType: "attendance_upload" | "manual";
+  sourceType: "attendance_upload" | "system_generated" | "manual";
   sourceFileName: string | null;
   sourceTimeIn: string | null;
   sourceGeneratedUndertimeId: string | null;
+  canRestoreToUndertime: boolean;
 };
 
 export async function restoreApprovedExemptionLate(id: string) {
@@ -742,7 +745,7 @@ export async function loadStagedHalfDays(workspace: Workspace): Promise<StagedHa
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((item) => ({
+  const records = (data ?? []).map((item) => ({
     id: String(item.id),
     employeeId: String(item.employee_id),
     employeeName: String(item.employee_name),
@@ -751,10 +754,26 @@ export async function loadStagedHalfDays(workspace: Workspace): Promise<StagedHa
     scheduledStart: String(item.scheduled_start),
     scheduledEnd: String(item.scheduled_end),
     reason: String(item.reason),
-    sourceType: item.source_type === "attendance_upload" ? "attendance_upload" : "manual",
+    sourceType: item.source_type === "attendance_upload" || item.source_type === "system_generated" ? item.source_type : "manual",
     sourceFileName: item.source_file_name == null ? null : String(item.source_file_name),
     sourceTimeIn: item.source_time_in == null ? null : String(item.source_time_in),
     sourceGeneratedUndertimeId: item.source_generated_undertime_id == null ? null : String(item.source_generated_undertime_id),
+    canRestoreToUndertime: false,
+  }));
+  const linkedIds = [...new Set(records.filter((record) => record.sourceType === "system_generated" && record.sourceGeneratedUndertimeId).map((record) => record.sourceGeneratedUndertimeId as string))];
+  if (workspace !== "APP" || linkedIds.length === 0) return records;
+  const { data: sources, error: sourceError } = await supabase
+    .from("generated_undertimes")
+    .select("id")
+    .eq("workspace", "APP")
+    .eq("is_deleted", true)
+    .eq("deleted_reason", "reclassified_as_half_day")
+    .in("id", linkedIds);
+  if (sourceError) throw sourceError;
+  const availableIds = new Set((sources ?? []).map((row) => String(row.id)));
+  return records.map((record) => ({
+    ...record,
+    canRestoreToUndertime: record.sourceType === "system_generated" && record.sourceGeneratedUndertimeId !== null && availableIds.has(record.sourceGeneratedUndertimeId),
   }));
 }
 
@@ -956,6 +975,62 @@ export async function updateGeneratedUndertimeDetails(id: string, reason: string
     p_reason: reason.trim(),
     p_informed: informed,
   });
+  if (error) throw error;
+}
+
+export async function moveGeneratedUndertimeToHalfDay(id: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("move_generated_undertime_to_half_day", { p_id: id });
+  if (error) { console.error("move_generated_undertime_to_half_day failed", error); throw new Error(error.message); }
+  return rowId(data);
+}
+
+export async function restoreConvertedHalfDayToUndertime(id: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("restore_converted_half_day_to_undertime", { p_half_day_id: id });
+  if (error) throw error;
+}
+
+export function validateExemptionPicture(file: File) {
+  if (!(file.type === "image/jpeg" || file.type === "image/png" || file.type === "image/webp")) throw new Error("Only JPG, JPEG, PNG, and WEBP images are accepted.");
+  if (file.size > EXEMPTION_IMAGE_MAX_BYTES) throw new Error("Each picture must be 5 MB or smaller.");
+}
+
+export async function uploadExemptionPicture(workspace: Workspace, exemptionId: string, file: File): Promise<ExemptionPicture> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  validateExemptionPicture(file);
+  const safeName = file.name.replace(/[^\w.-]+/g, "_");
+  const path = `exemptions/${workspace}/${exemptionId}/${crypto.randomUUID()}-${safeName}`;
+  const { error } = await supabase.storage.from(ATTENDANCE_STORAGE_BUCKET).upload(path, file, { upsert: false, contentType: file.type });
+  if (error) { console.error("exemption picture upload failed", error); throw new Error("Unable to upload exemption picture."); }
+  const { data, error: insertError } = await supabase.from("exemption_pictures").insert({ exemption_id: Number(exemptionId), workspace, storage_path: path, file_name: file.name, content_type: file.type, size_bytes: file.size }).select("id, file_name, storage_path, content_type, size_bytes").single();
+  if (insertError) { await supabase.storage.from(ATTENDANCE_STORAGE_BUCKET).remove([path]); console.error("exemption picture metadata insert failed", insertError); throw new Error("Unable to save exemption picture."); }
+  return { id: rowId(data.id), fileName: data.file_name, storagePath: data.storage_path, contentType: data.content_type, sizeBytes: data.size_bytes };
+}
+
+export async function deleteExemptionPicture(id: string, storagePath: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.from("exemption_pictures").delete().eq("id", id);
+  if (error) { console.error("exemption picture delete failed", error); throw new Error("You do not have permission to modify exemption evidence."); }
+  await supabase.storage.from(ATTENDANCE_STORAGE_BUCKET).remove([storagePath]);
+}
+
+export async function loadExemptionPictures(workspace: Workspace): Promise<Map<string, ExemptionPicture[]>> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.from("exemption_pictures").select("id, exemption_id, file_name, storage_path, content_type, size_bytes").eq("workspace", workspace);
+  if (error) throw error;
+  const grouped = new Map<string, ExemptionPicture[]>();
+  for (const item of data ?? []) {
+    const { data: signed } = await supabase.storage.from(ATTENDANCE_STORAGE_BUCKET).createSignedUrl(item.storage_path, 3600);
+    const picture = { id: rowId(item.id), fileName: item.file_name, storagePath: item.storage_path, contentType: item.content_type, sizeBytes: item.size_bytes, url: signed?.signedUrl };
+    const key = rowId(item.exemption_id); grouped.set(key, [...(grouped.get(key) ?? []), picture]);
+  }
+  return grouped;
+}
+
+export async function updateExemptionEvidence(id: string, reason: string) {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("update_exemption_evidence", { p_id: Number(id), p_reason: reason.trim() });
   if (error) throw error;
 }
 
@@ -1237,6 +1312,7 @@ export async function clearWorkspaceAttendanceData(workspace: Workspace) {
 
 export type DeletedRecord<T> = T & {
   deletedAt: string | null;
+  deletedBy?: string | null;
   deletedReason: string | null;
   deletedBatchId: string | null;
 };
@@ -1470,14 +1546,20 @@ export async function loadDeletedAttendanceData(
   });
 
   (halfDaysResult.data ?? []).forEach((item) => {
+    const periodLabel = item.absent_period === "morning" ? "Morning Half-Day" : "Afternoon Half-Day";
+    const sourceLabel = item.source_generated_undertime_id != null
+      ? `From Generated Undertime #${item.source_generated_undertime_id}`
+      : item.source_file_name ?? (item.source_type === "system_generated" ? "System Generated" : item.source_type === "attendance_upload" ? "Attendance Upload" : "Manual");
+    const schedule = `${formatTime12Hour(String(item.scheduled_start ?? ""))}–${formatTime12Hour(String(item.scheduled_end ?? ""))}`;
     manualHrRecords.push({
       id: rowId(item.id),
       type: "half_day",
       name: item.employee_name ?? "Employee",
       date: toDisplayDate(item.work_date),
       reason: item.reason ?? "",
-      details: `${item.scheduled_start ?? ""}–${item.scheduled_end ?? ""}`,
+      details: `${periodLabel}\n${schedule}\n${sourceLabel}`,
       deletedAt: item.deleted_at ?? null,
+      deletedBy: item.deleted_by == null ? null : rowId(item.deleted_by),
       deletedReason: item.deleted_reason ?? null,
       deletedBatchId: item.deleted_batch_id ?? null,
     });

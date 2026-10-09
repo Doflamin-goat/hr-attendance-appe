@@ -5,13 +5,15 @@ import {
   CalendarDays,
   Trash2,
   RotateCcw,
+  X,
 } from "lucide-react";
 import { useAttendance, type Exemption, type LateRecord } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
 import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { EmployeeFilterCombobox } from "../components/employees/EmployeeFilterCombobox";
 import { useAuth } from "../context/AuthContext";
-import { createDateExemptionRule, disableDateExemptionRule, listDateExemptionRules, loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption, type DateExemptionRule } from "../services/attendanceService";
+import { createDateExemptionRule, disableDateExemptionRule, listDateExemptionRules, loadCrossWorkspaceExemptionWorkflowData, submitLinkedExemption, uploadExemptionPicture, validateExemptionPicture, loadExemptionPictures, deleteExemptionPicture, updateExemptionEvidence, type DateExemptionRule } from "../services/attendanceService";
+import type { ExemptionPicture } from "../context/AttendanceContext";
 import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
 import {
@@ -66,6 +68,13 @@ export function Exemptions() {
   const { activeEmployees } = useEmployees();
 
   const [formData, setFormData] = useState({ employeeId: "", employeeName: "", reason: "", date: "", informed: [] as string[] });
+  const [pictureFiles, setPictureFiles] = useState<File[]>([]);
+  const [pictureMap, setPictureMap] = useState<Map<string, ExemptionPicture[]>>(new Map());
+  const [viewer, setViewer] = useState<{ pictures: ExemptionPicture[]; index: number } | null>(null);
+  const [editTarget, setEditTarget] = useState<Exemption | null>(null);
+  const [editReason, setEditReason] = useState("");
+  const [editPictures, setEditPictures] = useState<ExemptionPicture[]>([]);
+  const [editFiles, setEditFiles] = useState<File[]>([]);
   const [lateRecordId, setLateRecordId] = useState("");
   const [workflowData, setWorkflowData] = useState<{ lateRecords: LateRecord[]; exemptions: Exemption[] }>({ lateRecords: [], exemptions: [] });
   const employeeOptions = useMemo(() => [...activeEmployees].sort((a, b) => a.fullName.localeCompare(b.fullName)), [activeEmployees]);
@@ -83,6 +92,7 @@ export function Exemptions() {
     const load = async () => { await refreshWorkflowData(); };
     void load();
   }, [workspace]);
+  useEffect(() => { if (workspace) void loadExemptionPictures(workspace).then(setPictureMap).catch(() => setPictureMap(new Map())); }, [workspace, exemptions.length]);
   useEffect(() => { if (workspace) void listDateExemptionRules(workspace).then(setDateRules).catch(() => setDateRules([])); }, [workspace]);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
@@ -142,12 +152,14 @@ export function Exemptions() {
       return;
     }
     try {
-      await submitLinkedExemption({ employeeId: selectedEmployee.id, lateRecordId: Number(selectedLate.id), reason: formData.reason, informedParties: formData.informed });
+      const exemptionId = await submitLinkedExemption({ employeeId: selectedEmployee.id, lateRecordId: Number(selectedLate.id), reason: formData.reason, informedParties: formData.informed });
+      for (const file of pictureFiles) await uploadExemptionPicture(workspace as "APP" | "WAIS", String(exemptionId), file);
       await refreshAttendanceData();
       await refreshWorkflowData();
       setFeedback({ type: "success", message: "Exemption submitted as Pending. The linked late remains counted until approval." });
       setSelectedMonth(getMonthKey(formData.date));
       setFormData({ employeeId: "", employeeName: "", reason: "", date: "", informed: [] });
+      setPictureFiles([]);
       setLateRecordId("");
     } catch (error) {
       setFeedback({ type: "error", message: describeSubmitExemptionError(error) });
@@ -248,6 +260,8 @@ export function Exemptions() {
                   setFormData({ ...formData, reason: e.target.value })
                 }
               />
+
+              <div><p className="mb-1 text-sm font-medium text-slate-700">Picture (Optional)</p><p className="mb-2 text-xs text-slate-500">Upload up to 3 pictures, max 5 MB each.</p><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { try { const files = Array.from(event.target.files ?? []); if (files.length + pictureFiles.length > 3) throw new Error("You can attach up to 3 pictures."); files.forEach(validateExemptionPicture); setPictureFiles([...pictureFiles, ...files]); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Invalid picture." }); } event.currentTarget.value = ""; }} disabled={pictureFiles.length >= 3} className="block w-full text-sm" />{pictureFiles.length > 0 && <div className="mt-2 space-y-1">{pictureFiles.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between rounded border px-2 py-1 text-xs"><span className="truncate">{file.name}</span><button type="button" onClick={() => setPictureFiles(pictureFiles.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove ${file.name}`}><X className="h-3.5 w-3.5" /></button></div>)}</div>}</div>
 
               <Button
                 type="submit"
@@ -376,6 +390,7 @@ export function Exemptions() {
                               </Button>}
                             </div>
                           </div>
+                          {(pictureMap.get(record.id) ?? []).length > 0 && <div className="mt-3"><p className="mb-1 text-xs font-medium text-slate-600">Pictures</p><div className="flex flex-wrap gap-2">{(pictureMap.get(record.id) ?? []).map((picture, index) => <button type="button" key={picture.id} onClick={() => setViewer({ pictures: pictureMap.get(record.id) ?? [], index })} className="h-12 w-12 overflow-hidden rounded border border-slate-200"><img src={picture.url} alt={picture.fileName} className="h-full w-full object-cover" /></button>)}</div></div>}
 
                           <div className="mt-3 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-sm text-slate-700 leading-5">
                             <span className="font-medium text-slate-900">
@@ -387,6 +402,7 @@ export function Exemptions() {
                           {(reportedTime || informedPeople.length > 0) && <p className="mt-2 text-xs text-slate-500">{reportedTime ? `Time: ${reportedTime}` : ""}{reportedTime && informedPeople.length > 0 ? " • " : ""}{informedPeople.length > 0 ? `Informed: ${informedPeople.join(", ")}` : ""}</p>}
                           {record.reviewedAt && <p className="mt-2 text-xs text-slate-500">Reviewer: {record.reviewedBy ? "Admin" : "Not recorded"} • Reviewed: {new Date(record.reviewedAt).toLocaleString()} • Remarks: {record.reviewRemarks || "None"}</p>}
                           {record.lateRestoredAt && <p className="mt-2 text-xs font-medium text-warning-700">Late Record Restored • {new Date(record.lateRestoredAt).toLocaleString()}</p>}
+                          {!readOnly && <Button size="sm" variant="secondary" className="mt-3" onClick={() => { setEditTarget(record); setEditReason(record.reason); setEditPictures(pictureMap.get(record.id) ?? []); setEditFiles([]); }}>Edit</Button>}
                         </div>
                       </div>
                     </li>
@@ -436,6 +452,8 @@ export function Exemptions() {
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}
       />
+      {viewer && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-4"><div className="relative rounded-xl bg-white p-4"><button type="button" className="absolute right-2 top-2" onClick={() => setViewer(null)}><X /></button>{viewer.pictures[viewer.index]?.url && <img src={viewer.pictures[viewer.index].url} alt={viewer.pictures[viewer.index].fileName} className="max-h-[75vh] max-w-[80vw] object-contain" />}<div className="mt-3 flex justify-between gap-3"><Button size="sm" variant="secondary" disabled={viewer.index === 0} onClick={() => setViewer({ ...viewer, index: viewer.index - 1 })}>Previous</Button><Button size="sm" variant="secondary" disabled={viewer.index === viewer.pictures.length - 1} onClick={() => setViewer({ ...viewer, index: viewer.index + 1 })}>Next</Button></div></div></div>}
+      {editTarget && <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/40 p-4"><Card className="w-full max-w-lg"><SectionHeader title="Edit Exemption" description="Only reason and pictures can be changed." /><Textarea className="mt-4" label="Reason" required rows={3} value={editReason} onChange={(event) => setEditReason(event.target.value)} /><Input className="mt-4" label="Add Pictures" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { try { const files = Array.from(event.target.files ?? []); if (files.length + editPictures.length + editFiles.length > 3) throw new Error("You can attach up to 3 pictures."); files.forEach(validateExemptionPicture); setEditFiles([...editFiles, ...files]); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Invalid picture." }); } event.currentTarget.value = ""; }} disabled={editPictures.length + editFiles.length >= 3} /><div className="mt-3 space-y-1">{editPictures.map((picture) => <div key={picture.id} className="flex items-center justify-between text-xs"><span>{picture.fileName}</span><Button size="sm" variant="danger" onClick={() => setEditPictures(editPictures.filter((item) => item.id !== picture.id))}>Remove</Button></div>)}{editFiles.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between text-xs"><span>{file.name}</span><Button size="sm" variant="danger" onClick={() => setEditFiles(editFiles.filter((_, itemIndex) => itemIndex !== index))}>Remove</Button></div>)}</div><div className="mt-4 flex justify-end gap-2"><Button variant="secondary" onClick={() => setEditTarget(null)}>Cancel</Button><Button onClick={async () => { try { await updateExemptionEvidence(editTarget.id, editReason); for (const picture of (pictureMap.get(editTarget.id) ?? []).filter((item) => !editPictures.some((current) => current.id === item.id))) await deleteExemptionPicture(picture.id, picture.storagePath); for (const file of editFiles) await uploadExemptionPicture(workspace as "APP" | "WAIS", editTarget.id, file); setEditTarget(null); await refreshAttendanceData(); if (workspace) setPictureMap(await loadExemptionPictures(workspace)); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Could not update exemption." }); } }}>Save</Button></div></Card></div>}
     </div>
   );
 }

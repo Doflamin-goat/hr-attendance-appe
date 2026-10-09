@@ -123,7 +123,7 @@ function ReasonCell({ row }: { row: DeletedUploadedFileRow }) {
 }
 
 export function RecycleBin() {
-  const { workspace, role } = useAuth();
+  const { workspace, hrScope, role } = useAuth();
   const {
     deletedAttendanceData,
     deletedAttendanceLoading,
@@ -144,6 +144,8 @@ export function RecycleBin() {
   const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const [deletedServices, setDeletedServices] = useState<ServiceEvent[]>([]);
   const [serviceBusy, setServiceBusy] = useState<string | null>(null);
+  const isWaisMainHr = workspace === "WAIS" && hrScope === "MAIN" && role === "HR";
+  const hideDeletedBy = isWaisMainHr || (workspace === "APP" && hrScope === "ITC" && role === "HR");
 
   useEffect(() => {
     void loadDeletedAttendanceData();
@@ -208,8 +210,10 @@ export function RecycleBin() {
       {
         key: "type",
         header: "Type",
+        className: `${isWaisMainHr ? "w-[112px] !px-2 align-middle" : "w-28"} ${isWaisMainHr ? "text-center" : ""}`,
+        headerClassName: isWaisMainHr ? "w-[112px] text-center" : "w-28",
         render: (row) => (
-          <Badge tone={MANUAL_TYPE_TONE[row.type]}>
+          <Badge className={isWaisMainHr ? "min-w-[92px] justify-center whitespace-nowrap" : ""} tone={MANUAL_TYPE_TONE[row.type]}>
             <ManualTypeIcon type={row.type} />
             {MANUAL_TYPE_LABEL[row.type]}
           </Badge>
@@ -218,8 +222,10 @@ export function RecycleBin() {
       {
         key: "name",
         header: "Employee",
+        className: isWaisMainHr ? "w-[156px] align-middle" : "w-48",
+        headerClassName: isWaisMainHr ? "w-[156px]" : "w-48",
         render: (row) => (
-          <span className="font-medium text-slate-900 truncate block">
+          <span className={`font-medium text-slate-900 block ${isWaisMainHr ? "break-words leading-5" : "truncate"}`}>
             {row.name || "—"}
           </span>
         ),
@@ -227,6 +233,8 @@ export function RecycleBin() {
       {
         key: "date",
         header: "Date",
+        className: isWaisMainHr ? "w-[96px] align-middle" : "w-32",
+        headerClassName: isWaisMainHr ? "w-[96px]" : "w-32",
         render: (row) => (
           <span className="text-xs text-slate-600 tabular-nums">
             {row.date || "—"}
@@ -234,10 +242,26 @@ export function RecycleBin() {
         ),
       },
       {
+        key: "details",
+        header: "Period / Source",
+        className: `${isWaisMainHr ? "w-[230px] align-middle" : "w-[340px]"} whitespace-pre-line break-words`,
+        headerClassName: isWaisMainHr ? "w-[230px]" : "w-[340px]",
+        render: (row) => <span className="block whitespace-pre-line break-words text-xs leading-5 text-slate-600">{row.details || "—"}</span>,
+      },
+      ...(!hideDeletedBy ? [{
+        key: "deletedBy",
+        header: "Deleted By",
+        className: "w-36",
+        headerClassName: "w-36",
+        render: (row: DeletedManualHrRow) => <span className="break-all text-xs text-slate-600">{row.deletedBy || "—"}</span>,
+      } satisfies Column<DeletedManualHrRow>] : []),
+      {
         key: "deletedAt",
         header: "Moved to Trash",
+        className: `${isWaisMainHr ? "w-[168px] align-middle" : "w-48"} whitespace-normal`,
+        headerClassName: isWaisMainHr ? "w-[168px]" : "w-48",
         render: (row) => (
-          <span className="text-xs text-slate-600">
+          <span className={`text-xs leading-5 text-slate-600 ${isWaisMainHr ? "whitespace-normal" : "whitespace-nowrap"}`}>
             {formatDeletedAt(row.deletedAt)}
           </span>
         ),
@@ -246,11 +270,14 @@ export function RecycleBin() {
         key: "actions",
         header: "Actions",
         align: "right",
+        className: isWaisMainHr ? "w-[272px] align-middle" : "w-[290px]",
+        headerClassName: isWaisMainHr ? "w-[272px]" : "w-[290px]",
         render: (row) => (
-          <div className="flex items-center justify-end gap-2">
+          <div className={`flex min-w-max flex-nowrap items-center justify-end ${isWaisMainHr ? "gap-1.5" : "gap-2"}`}>
             <Button
               variant="primary"
               size="sm"
+              className={isWaisMainHr ? "!px-2" : ""}
               leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
               loading={
                 manualBusyId === row.id && manualPending?.kind === "restore"
@@ -263,6 +290,7 @@ export function RecycleBin() {
             <Button
               variant="danger"
               size="sm"
+              className={isWaisMainHr ? "!px-2" : ""}
               leftIcon={<Trash2 className="w-3.5 h-3.5" />}
               loading={
                 manualBusyId === row.id && manualPending?.kind === "remove"
@@ -276,7 +304,7 @@ export function RecycleBin() {
         ),
       },
     ],
-    [manualBusyId, manualPending]
+    [hideDeletedBy, manualBusyId, manualPending]
   );
 
   const columns: Column<DeletedUploadedFileRow>[] = useMemo(
@@ -436,8 +464,8 @@ export function RecycleBin() {
           <SectionHeader
             icon={<ClipboardList className="w-5 h-5" />}
             iconTone="warning"
-            title="Deleted HR Manual Records"
-            description="Exemptions, absences, and manual undertime entries that were soft-deleted. Restoring returns the row to its own page only — it does not bring back uploaded files or Late Records."
+            title="Deleted HR Records"
+            description="Soft-deleted HR records, including manual entries and generated Half-Days. Restoring returns the record to its page; generated Half-Days retain their conversion source."
           />
           <Badge tone="neutral">
             {manualHrCount} record{manualHrCount === 1 ? "" : "s"}
@@ -455,12 +483,15 @@ export function RecycleBin() {
             className="py-10"
           />
         ) : (
-          <DataTable
-            columns={manualColumns}
-            rows={deletedAttendanceData.manualHrRecords}
-            rowKey={(row) => `${row.type}-${row.id}`}
-            dense
-          />
+            <div className={isWaisMainHr ? "w-full overflow-x-auto md:overflow-x-visible" : "w-full overflow-x-auto"}>
+              <DataTable
+                columns={manualColumns}
+                rows={deletedAttendanceData.manualHrRecords}
+                rowKey={(row) => `${row.type}-${row.id}`}
+                className={isWaisMainHr ? "min-w-[1034px]" : hideDeletedBy ? "min-w-[1260px]" : "min-w-[1404px]"}
+                dense
+              />
+            </div>
         )}
       </Card>
 
@@ -531,7 +562,7 @@ export function RecycleBin() {
               <span className="font-semibold">
                 {manualPending.record.name || "this employee"}
               </span>{" "}
-              on {manualPending.record.date} back to its page. No uploaded files
+              on {manualPending.record.date} back to its page. {manualPending.record.type === "half_day" && manualPending.record.details ? <span className="mt-2 block">{manualPending.record.details}</span> : null} No uploaded files
               or Late Records will be touched.
             </>
           ) : null

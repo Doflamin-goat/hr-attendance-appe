@@ -26,10 +26,26 @@ function client() {
   return supabase;
 }
 
-function toManilaTimestamptz(value: string | null) {
+export function dbTimestampToManilaInput(value: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "00";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}:${part("second")}`;
+}
+
+export function manilaInputToUtcTimestamp(value: string | null): string | null {
   if (!value) return null;
-  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(value)) return new Date(value).toISOString();
-  return new Date(`${value}:00+08:00`).toISOString();
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) throw new Error("Enter a valid Service date and time.");
+  const [, year, month, day, hour, minute, second = "00"] = match;
+  const local = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)));
+  if (local.getUTCFullYear() !== Number(year) || local.getUTCMonth() + 1 !== Number(month) || local.getUTCDate() !== Number(day) || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) {
+    throw new Error("Enter a valid Service date and time.");
+  }
+  const instant = new Date(local.getTime() - 8 * 60 * 60 * 1000);
+  return instant.toISOString();
 }
 
 function throwServiceRpcError(operation: string, error: { message?: string; code?: string; details?: string; hint?: string }): never {
@@ -77,8 +93,8 @@ export async function createServiceEvent(input: ServiceEventInput) {
   const { data, error } = await client().rpc("create_service_event", {
     p_service_ref: input.serviceRef || null,
     p_workspace: input.workspace,
-    p_service_start: toManilaTimestamptz(input.serviceStart),
-    p_service_end: toManilaTimestamptz(input.serviceEnd),
+    p_service_start: manilaInputToUtcTimestamp(input.serviceStart),
+    p_service_end: manilaInputToUtcTimestamp(input.serviceEnd),
     p_employee_ids: input.employeeIds,
     p_client: input.client || null,
     p_location: input.location || null,
@@ -96,8 +112,8 @@ export async function updateServiceEvent(id: string, input: ServiceEventInput) {
     p_id: id,
     p_service_ref: input.serviceRef || null,
     p_workspace: input.workspace,
-    p_service_start: toManilaTimestamptz(input.serviceStart),
-    p_service_end: toManilaTimestamptz(input.serviceEnd),
+    p_service_start: manilaInputToUtcTimestamp(input.serviceStart),
+    p_service_end: manilaInputToUtcTimestamp(input.serviceEnd),
     p_employee_ids: input.employeeIds,
     p_client: input.client || null,
     p_location: input.location || null,
@@ -117,6 +133,48 @@ export async function suggestServiceReference(): Promise<string> {
 export async function cancelServiceEvent(id: string, workspace: ServiceWorkspace) {
   const { error } = await client().rpc("cancel_service_event", { p_id: id, p_workspace: workspace });
   if (error) throw error;
+}
+
+export type MainServiceAttendanceType = "absence" | "half_day" | "undertime";
+
+export async function listEligibleMainServices(type: MainServiceAttendanceType, recordId: string): Promise<ServiceEvent[]> {
+  const { data, error } = await client().rpc("list_eligible_main_services", { p_record_type: type, p_record_id: recordId });
+  if (error) throwServiceRpcError("load eligible MAIN Services", error);
+  return (data ?? []).map((row: Record<string, unknown>) => mapEvent(row, []));
+}
+
+export async function moveMainGeneratedAttendanceToService(type: MainServiceAttendanceType, recordId: string, serviceId: string) {
+  const { error } = await client().rpc("move_main_generated_attendance_to_service", {
+    p_record_type: type, p_record_id: recordId, p_service_id: serviceId,
+  });
+  if (error) throwServiceRpcError("move generated attendance to Service", error);
+}
+
+export async function refreshMainServiceAttendance() {
+  const { error } = await client().rpc("refresh_main_service_attendance");
+  if (error) throwServiceRpcError("refresh MAIN Service attendance", error);
+}
+
+export async function reconcileItcServiceAttendance(serviceId: string) {
+  const { error } = await client().rpc("reconcile_itc_service_attendance", { p_event_id: serviceId });
+  if (error) throw error;
+}
+
+export async function listEligibleItcServices(_employeeId: string, workDate: string): Promise<ServiceEvent[]> {
+  const events = await listServiceEvents("APP");
+  return events.filter((event) => event.status !== "cancelled" && event.serviceStart.slice(0, 10) <= workDate && (!event.serviceEnd || event.serviceEnd.slice(0, 10) >= workDate));
+}
+
+export async function moveItcGeneratedAttendanceToService(type: "half_day" | "undertime", recordId: string, serviceId: string) {
+  const { error } = await client().rpc("move_itc_generated_attendance_to_service", { p_record_type: type, p_record_id: recordId, p_service_id: serviceId });
+  if (!error) return;
+  if (import.meta.env.DEV) console.error("[Service] Move generated attendance to Service failed", { type, recordId, serviceId, message: error.message, code: error.code, details: error.details, hint: error.hint });
+  const detail = error.message?.toLowerCase() ?? "";
+  if (detail.includes("no matching employee could be resolved")) throw new Error("No matching employee could be resolved for this generated Undertime.");
+  if (detail.includes("identity is ambiguous")) throw new Error("This generated attendance has an ambiguous employee identity. Resolve it before moving to Service.");
+  if (detail.includes("does not cover this attendance record")) throw new Error("Selected Service does not cover this attendance record.");
+  if (detail.includes("eligible app service record not found")) throw new Error("Selected Service is no longer active or eligible.");
+  throw new Error("Could not reconcile this generated attendance with the selected Service.");
 }
 
 export async function deleteServiceEvent(id: string, workspace: ServiceWorkspace) {
