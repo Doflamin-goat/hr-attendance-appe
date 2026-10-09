@@ -981,7 +981,11 @@ export async function updateGeneratedUndertimeDetails(id: string, reason: string
 export async function moveGeneratedUndertimeToHalfDay(id: string) {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase.rpc("move_generated_undertime_to_half_day", { p_id: id });
-  if (error) { console.error("move_generated_undertime_to_half_day failed", error); throw new Error(error.message); }
+  if (error) {
+    if (import.meta.env.DEV) console.error("move_generated_undertime_to_half_day failed", error);
+    const expected = error.message.match(/^(A Half-Day record already exists for this employee and date\.|Only APP ITC HR can move generated Undertime to Half-Day|Active system-generated Undertime not found|Generated Undertime employee cannot be uniquely resolved|Employee is not in the APP\/ITC workspace|A valid scheduled work date is required|Only generated Undertime after the morning work period can be moved to Half-Day)$/);
+    throw new Error(expected?.[0] ?? "Could not move this generated Undertime to Half-Day. Please try again or contact support.");
+  }
   return rowId(data);
 }
 

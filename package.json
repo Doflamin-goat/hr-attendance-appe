@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:focused": "node --test tests/role-and-attendance-forms.test.mts tests/main-attendance-sources-rls.test.mts tests/wais-service-reconciliation.test.mts",
+    "test:focused": "node --test tests/role-and-attendance-forms.test.mts tests/main-attendance-sources-rls.test.mts tests/wais-service-reconciliation.test.mts tests/itc-halfday-duplicate-reuse.test.mts",
     "preview": "vite preview"
   },
   "dependencies": {
