@@ -11,6 +11,35 @@ import { activeMainAttendanceRecordIds, aggregateMainAttendance, checkoutUnderti
 import { informedPeopleForScope } from "../src/utils/informedPeople.ts";
 import { attendanceDateValue, attendanceTimeValue, computeExcelColumnWidth, sortAttendanceDetailRecords, toExcelCalendarDate } from "../src/utils/exportRows.ts";
 
+test("exemption evidence upload and gallery viewer remain scoped, accessible, and read-only for Admin", () => {
+  const page = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  assert.match(page, /type="file"[\s\S]*?className="sr-only"/);
+  assert.match(page, /Drop pictures here or[\s\S]*?Browse/);
+  assert.match(page, /onDrop=\{\(event\) => \{ event\.preventDefault\(\); setDragging\(false\)/);
+  assert.match(page, /You can upload up to 3 pictures\./);
+  assert.match(page, /max 5 MB each/i);
+  assert.match(page, /SelectedPicturePreview/);
+  assert.match(page, /SavedPictureThumbnail/);
+  assert.match(page, /role="dialog" aria-modal="true"/);
+  assert.match(page, /max-w-5xl/);
+  assert.match(page, /object-contain/);
+  assert.match(page, /event\.key === "Escape"/);
+  assert.match(page, /event\.key === "ArrowLeft"/);
+  assert.match(page, /event\.key === "ArrowRight"/);
+  assert.match(page, /Picture \{index \+ 1\} of \{pictures\.length\}/);
+  assert.match(page, /aria-label="Close picture viewer"/);
+  assert.match(page, /!readOnly && <Button[\s\S]*?>Edit<\/Button>/);
+  assert.match(page, /editPictures\.length \+ editFiles\.length >= 3/);
+  assert.match(page, /for \(const picture of \(pictureMap\.get\(editTarget\.id\) \?\? \[\]\)\.filter/);
+  assert.match(page, /loadExemptionPictures\(workspace\)/);
+  assert.match(service, /file\.type === "image\/jpeg" \|\| file\.type === "image\/png"/);
+  assert.match(service, /Only JPG, JPEG, and PNG images are allowed\./);
+  assert.match(service, /Each picture must be 5 MB or smaller\./);
+  assert.match(service, /MAX.*5 \* 1024 \* 1024|EXEMPTION_IMAGE_MAX_BYTES = 5 \* 1024 \* 1024/);
+  assert.match(service, /eq\("workspace", workspace\)/);
+});
+
 test("remaining leave display describes zero without changing other duration labels", () => {
   for (const [minutes, expected] of [
     [0, "No leave remaining"], [480, "1 day"], [2400, "5 days"],

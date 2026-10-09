@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ShieldCheck,
   Plus,
@@ -6,6 +6,11 @@ import {
   Trash2,
   RotateCcw,
   X,
+  Upload,
+  ImagePlus,
+  ChevronLeft,
+  ChevronRight,
+  LoaderCircle,
 } from "lucide-react";
 import { useAttendance, type Exemption, type LateRecord } from "../context/AttendanceContext";
 import { useEmployees } from "../context/EmployeesContext";
@@ -54,6 +59,169 @@ function formatMonthLabel(monthKey: string) {
 type RestoreTarget = { id: string; name: string; date: string } | null;
 type DeleteTarget = { id: string; name: string; date: string } | null;
 
+function SelectedPicturePreview({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return (
+    <div className="flex min-w-0 items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
+      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-slate-100">
+        {previewUrl && <img src={previewUrl} alt="" className="h-full w-full object-cover" />}
+      </div>
+      <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-700" title={file.name}>{file.name}</span>
+      <button type="button" onClick={onRemove} aria-label={`Remove ${file.name}`} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function PictureUploadField({
+  files,
+  disabled,
+  onSelect,
+  onRemove,
+  error,
+  label = "Add pictures",
+}: {
+  files: File[];
+  disabled: boolean;
+  onSelect: (files: File[]) => void;
+  onRemove: (index: number) => void;
+  error?: string;
+  label?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const takeFiles = (list: FileList | File[]) => {
+    const selected = Array.from(list);
+    if (selected.length) onSelect(selected);
+  };
+  return (
+    <div>
+      <p className="mb-1 text-sm font-medium text-slate-700">{label} <span className="font-normal text-slate-500">(Optional)</span></p>
+      <p className="mb-2 text-xs text-slate-500">Upload up to 3 pictures, max 5 MB each.</p>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/jpeg,image/png"
+        multiple
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => { takeFiles(event.currentTarget.files ?? []); event.currentTarget.value = ""; }}
+      />
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+        onDragEnter={(event) => { event.preventDefault(); if (!disabled) setDragging(true); }}
+        onDragOver={(event) => { event.preventDefault(); if (!disabled) setDragging(true); }}
+        onDragLeave={(event) => { event.preventDefault(); if (event.currentTarget === event.target) setDragging(false); }}
+        onDrop={(event) => { event.preventDefault(); setDragging(false); if (!disabled) takeFiles(event.dataTransfer.files); }}
+        className={`flex min-h-32 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-5 text-center transition ${disabled ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-60" : dragging ? "border-brand-500 bg-brand-50" : "border-slate-300 bg-slate-50/70 hover:border-brand-400 hover:bg-brand-50/50"}`}
+        aria-label={`${label}. Browse or drop pictures here. JPG, JPEG, and PNG, up to 5 MB each.`}
+      >
+        <span className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-white text-brand-700 shadow-sm"><Upload className="h-5 w-5" /></span>
+        <span className="text-sm font-semibold text-slate-800">Drop pictures here or <span className="text-brand-700 underline underline-offset-2">Browse</span></span>
+        <span className="mt-1 text-xs text-slate-500">JPG, JPEG, PNG · Max 5 MB each</span>
+        {disabled && <span className="mt-1 text-xs text-slate-500">Maximum of 3 pictures selected</span>}
+      </button>
+      {error && <p className="mt-2 text-sm font-medium text-rose-700" role="alert">{error}</p>}
+      {files.length > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-2">{files.map((file, index) => <SelectedPicturePreview key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => onRemove(index)} />)}</div>}
+    </div>
+  );
+}
+
+function ExemptionPictureViewer({
+  pictures,
+  employeeName,
+  index,
+  onClose,
+  onNavigate,
+}: {
+  pictures: ExemptionPicture[];
+  employeeName: string;
+  index: number;
+  onClose: () => void;
+  onNavigate: (direction: -1 | 1) => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const actionRef = useRef({ onClose, onNavigate });
+  const [imageLoading, setImageLoading] = useState(true);
+  const [imageFailed, setImageFailed] = useState(false);
+  const picture = pictures[index];
+  actionRef.current = { onClose, onNavigate };
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") actionRef.current.onClose();
+      if (event.key === "ArrowLeft") { event.preventDefault(); actionRef.current.onNavigate(-1); }
+      if (event.key === "ArrowRight") { event.preventDefault(); actionRef.current.onNavigate(1); }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    closeRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, []);
+  useEffect(() => { setImageLoading(true); setImageFailed(false); }, [picture?.url]);
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-2 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="evidence-viewer-title" className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-white shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-6">
+          <div className="min-w-0">
+            <h2 id="evidence-viewer-title" className="text-base font-semibold text-slate-900">Employee evidence</h2>
+            <p className="truncate text-sm text-slate-500">{employeeName}</p>
+          </div>
+          <button ref={closeRef} type="button" onClick={onClose} aria-label="Close picture viewer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><X className="h-5 w-5" /></button>
+        </header>
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-slate-950 px-2 py-3 sm:px-12 sm:py-5">
+          {picture && !imageFailed && <img src={picture.url} alt={`Evidence picture ${index + 1} for ${employeeName}`} onLoad={() => setImageLoading(false)} onError={() => { setImageLoading(false); setImageFailed(true); }} className={`max-h-[calc(92vh-170px)] max-w-full object-contain transition-opacity ${imageLoading ? "opacity-0" : "opacity-100"}`} />}
+          {imageLoading && !imageFailed && <div className="absolute flex items-center gap-2 text-sm text-white/80" role="status"><LoaderCircle className="h-5 w-5 animate-spin" />Loading picture…</div>}
+          {imageFailed && <div className="flex flex-col items-center gap-2 px-4 text-center text-sm text-white/80" role="status"><ImagePlus className="h-8 w-8" /><span>This picture could not be loaded.</span></div>}
+          {pictures.length > 1 && <>
+            <button type="button" onClick={() => onNavigate(-1)} disabled={index === 0} aria-label="Previous picture" className="absolute left-2 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-slate-800 shadow-lg hover:bg-white disabled:cursor-not-allowed disabled:opacity-40 sm:left-4 sm:h-12 sm:w-12"><ChevronLeft className="h-6 w-6" /></button>
+            <button type="button" onClick={() => onNavigate(1)} disabled={index === pictures.length - 1} aria-label="Next picture" className="absolute right-2 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-slate-800 shadow-lg hover:bg-white disabled:cursor-not-allowed disabled:opacity-40 sm:right-4 sm:h-12 sm:w-12"><ChevronRight className="h-6 w-6" /></button>
+          </>}
+        </div>
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 sm:px-6">
+          <p className="text-sm font-medium text-slate-600">Picture {index + 1} of {pictures.length}</p>
+          {pictures.length > 1 && <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" leftIcon={<ChevronLeft className="h-4 w-4" />} disabled={index === 0} onClick={() => onNavigate(-1)}>Previous</Button>
+            <Button size="sm" variant="secondary" rightIcon={<ChevronRight className="h-4 w-4" />} disabled={index === pictures.length - 1} onClick={() => onNavigate(1)}>Next</Button>
+          </div>}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function SavedPictureThumbnail({ picture, index, total, onClick }: { picture: ExemptionPicture; index: number; total: number; onClick: () => void }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <button type="button" onClick={onClick} aria-label={`Open picture ${index + 1} of ${total}`} className="group relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+      {!failed ? <img src={picture.url} alt={`Exemption evidence ${index + 1}`} onError={() => setFailed(true)} className="h-full w-full object-cover transition group-hover:scale-105" /> : <span className="flex h-full w-full items-center justify-center text-slate-400"><ImagePlus className="h-6 w-6" /></span>}
+      <span className="sr-only">{picture.fileName}</span>
+    </button>
+  );
+}
+
+function addValidatedPictures(files: File[], currentCount: number): File[] {
+  if (files.length + currentCount > 3) throw new Error("You can upload up to 3 pictures.");
+  files.forEach(validateExemptionPicture);
+  return files;
+}
+
 export function Exemptions() {
   const { workspace, hrScope, role } = useAuth();
   const readOnly = role === "Admin";
@@ -69,8 +237,9 @@ export function Exemptions() {
 
   const [formData, setFormData] = useState({ employeeId: "", employeeName: "", reason: "", date: "", informed: [] as string[] });
   const [pictureFiles, setPictureFiles] = useState<File[]>([]);
+  const [pictureError, setPictureError] = useState("");
   const [pictureMap, setPictureMap] = useState<Map<string, ExemptionPicture[]>>(new Map());
-  const [viewer, setViewer] = useState<{ pictures: ExemptionPicture[]; index: number } | null>(null);
+  const [viewer, setViewer] = useState<{ pictures: ExemptionPicture[]; index: number; employeeName: string } | null>(null);
   const [editTarget, setEditTarget] = useState<Exemption | null>(null);
   const [editReason, setEditReason] = useState("");
   const [editPictures, setEditPictures] = useState<ExemptionPicture[]>([]);
@@ -88,6 +257,14 @@ export function Exemptions() {
     return counts;
   }, new Map<string, number>()), [matchingLates]);
   const refreshWorkflowData = async () => { if (workspace) setWorkflowData(await loadCrossWorkspaceExemptionWorkflowData(workspace)); };
+  const handleNewPictureSelection = (files: File[]) => {
+    try { const validFiles = addValidatedPictures(files, pictureFiles.length); setPictureFiles((current) => [...current, ...validFiles]); setPictureError(""); }
+    catch (error) { setPictureError(error instanceof Error ? error.message : "Could not add these pictures."); }
+  };
+  const handleEditPictureSelection = (files: File[]) => {
+    try { const validFiles = addValidatedPictures(files, editPictures.length + editFiles.length); setEditFiles((current) => [...current, ...validFiles]); setPictureError(""); }
+    catch (error) { setPictureError(error instanceof Error ? error.message : "Could not add these pictures."); }
+  };
   useEffect(() => {
     const load = async () => { await refreshWorkflowData(); };
     void load();
@@ -261,7 +438,7 @@ export function Exemptions() {
                 }
               />
 
-              <div><p className="mb-1 text-sm font-medium text-slate-700">Picture (Optional)</p><p className="mb-2 text-xs text-slate-500">Upload up to 3 pictures, max 5 MB each.</p><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { try { const files = Array.from(event.target.files ?? []); if (files.length + pictureFiles.length > 3) throw new Error("You can attach up to 3 pictures."); files.forEach(validateExemptionPicture); setPictureFiles([...pictureFiles, ...files]); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Invalid picture." }); } event.currentTarget.value = ""; }} disabled={pictureFiles.length >= 3} className="block w-full text-sm" />{pictureFiles.length > 0 && <div className="mt-2 space-y-1">{pictureFiles.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between rounded border px-2 py-1 text-xs"><span className="truncate">{file.name}</span><button type="button" onClick={() => setPictureFiles(pictureFiles.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove ${file.name}`}><X className="h-3.5 w-3.5" /></button></div>)}</div>}</div>
+              <PictureUploadField files={pictureFiles} disabled={pictureFiles.length >= 3} onSelect={handleNewPictureSelection} onRemove={(index) => setPictureFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} error={pictureError} label="Picture" />
 
               <Button
                 type="submit"
@@ -390,7 +567,7 @@ export function Exemptions() {
                               </Button>}
                             </div>
                           </div>
-                          {(pictureMap.get(record.id) ?? []).length > 0 && <div className="mt-3"><p className="mb-1 text-xs font-medium text-slate-600">Pictures</p><div className="flex flex-wrap gap-2">{(pictureMap.get(record.id) ?? []).map((picture, index) => <button type="button" key={picture.id} onClick={() => setViewer({ pictures: pictureMap.get(record.id) ?? [], index })} className="h-12 w-12 overflow-hidden rounded border border-slate-200"><img src={picture.url} alt={picture.fileName} className="h-full w-full object-cover" /></button>)}</div></div>}
+                          {(pictureMap.get(record.id) ?? []).length > 0 && <div className="mt-4"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Pictures</p><div className="flex flex-wrap gap-2">{(pictureMap.get(record.id) ?? []).map((picture, index, pictures) => <SavedPictureThumbnail key={picture.id} picture={picture} index={index} total={pictures.length} onClick={() => setViewer({ pictures, index, employeeName: record.name })} />)}</div></div>}
 
                           <div className="mt-3 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-sm text-slate-700 leading-5">
                             <span className="font-medium text-slate-900">
@@ -402,7 +579,7 @@ export function Exemptions() {
                           {(reportedTime || informedPeople.length > 0) && <p className="mt-2 text-xs text-slate-500">{reportedTime ? `Time: ${reportedTime}` : ""}{reportedTime && informedPeople.length > 0 ? " • " : ""}{informedPeople.length > 0 ? `Informed: ${informedPeople.join(", ")}` : ""}</p>}
                           {record.reviewedAt && <p className="mt-2 text-xs text-slate-500">Reviewer: {record.reviewedBy ? "Admin" : "Not recorded"} • Reviewed: {new Date(record.reviewedAt).toLocaleString()} • Remarks: {record.reviewRemarks || "None"}</p>}
                           {record.lateRestoredAt && <p className="mt-2 text-xs font-medium text-warning-700">Late Record Restored • {new Date(record.lateRestoredAt).toLocaleString()}</p>}
-                          {!readOnly && <Button size="sm" variant="secondary" className="mt-3" onClick={() => { setEditTarget(record); setEditReason(record.reason); setEditPictures(pictureMap.get(record.id) ?? []); setEditFiles([]); }}>Edit</Button>}
+                          {!readOnly && <Button size="sm" variant="secondary" className="mt-3" onClick={() => { setEditTarget(record); setEditReason(record.reason); setEditPictures(pictureMap.get(record.id) ?? []); setEditFiles([]); setPictureError(""); }}>Edit</Button>}
                         </div>
                       </div>
                     </li>
@@ -452,8 +629,12 @@ export function Exemptions() {
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}
       />
-      {viewer && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-4"><div className="relative rounded-xl bg-white p-4"><button type="button" className="absolute right-2 top-2" onClick={() => setViewer(null)}><X /></button>{viewer.pictures[viewer.index]?.url && <img src={viewer.pictures[viewer.index].url} alt={viewer.pictures[viewer.index].fileName} className="max-h-[75vh] max-w-[80vw] object-contain" />}<div className="mt-3 flex justify-between gap-3"><Button size="sm" variant="secondary" disabled={viewer.index === 0} onClick={() => setViewer({ ...viewer, index: viewer.index - 1 })}>Previous</Button><Button size="sm" variant="secondary" disabled={viewer.index === viewer.pictures.length - 1} onClick={() => setViewer({ ...viewer, index: viewer.index + 1 })}>Next</Button></div></div></div>}
-      {editTarget && <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/40 p-4"><Card className="w-full max-w-lg"><SectionHeader title="Edit Exemption" description="Only reason and pictures can be changed." /><Textarea className="mt-4" label="Reason" required rows={3} value={editReason} onChange={(event) => setEditReason(event.target.value)} /><Input className="mt-4" label="Add Pictures" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { try { const files = Array.from(event.target.files ?? []); if (files.length + editPictures.length + editFiles.length > 3) throw new Error("You can attach up to 3 pictures."); files.forEach(validateExemptionPicture); setEditFiles([...editFiles, ...files]); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Invalid picture." }); } event.currentTarget.value = ""; }} disabled={editPictures.length + editFiles.length >= 3} /><div className="mt-3 space-y-1">{editPictures.map((picture) => <div key={picture.id} className="flex items-center justify-between text-xs"><span>{picture.fileName}</span><Button size="sm" variant="danger" onClick={() => setEditPictures(editPictures.filter((item) => item.id !== picture.id))}>Remove</Button></div>)}{editFiles.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between text-xs"><span>{file.name}</span><Button size="sm" variant="danger" onClick={() => setEditFiles(editFiles.filter((_, itemIndex) => itemIndex !== index))}>Remove</Button></div>)}</div><div className="mt-4 flex justify-end gap-2"><Button variant="secondary" onClick={() => setEditTarget(null)}>Cancel</Button><Button onClick={async () => { try { await updateExemptionEvidence(editTarget.id, editReason); for (const picture of (pictureMap.get(editTarget.id) ?? []).filter((item) => !editPictures.some((current) => current.id === item.id))) await deleteExemptionPicture(picture.id, picture.storagePath); for (const file of editFiles) await uploadExemptionPicture(workspace as "APP" | "WAIS", editTarget.id, file); setEditTarget(null); await refreshAttendanceData(); if (workspace) setPictureMap(await loadExemptionPictures(workspace)); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Could not update exemption." }); } }}>Save</Button></div></Card></div>}
+      {viewer && <ExemptionPictureViewer pictures={viewer.pictures} employeeName={viewer.employeeName} index={viewer.index} onClose={() => setViewer(null)} onNavigate={(direction) => setViewer((current) => current ? { ...current, index: Math.max(0, Math.min(current.pictures.length - 1, current.index + direction)) } : null)} />}
+      {editTarget && <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/50 p-3 backdrop-blur-sm sm:p-5"><Card className="max-h-[92vh] w-full max-w-2xl overflow-y-auto p-4 sm:p-6"><SectionHeader title="Edit Exemption" description="Update the reason and manage evidence pictures." /><Textarea className="mt-4" label="Reason" required rows={3} value={editReason} onChange={(event) => setEditReason(event.target.value)} />
+        {editPictures.length > 0 && <div className="mt-5"><p className="mb-2 text-sm font-medium text-slate-700">Existing pictures</p><div className="flex flex-wrap gap-3">{editPictures.map((picture, index) => <div key={picture.id} className="w-[88px]"><SavedPictureThumbnail picture={picture} index={index} total={editPictures.length} onClick={() => setViewer({ pictures: editPictures, index, employeeName: editTarget.name })} /><Button size="sm" variant="danger" className="mt-1 w-full px-2" aria-label={`Remove ${picture.fileName}`} onClick={() => setEditPictures((current) => current.filter((item) => item.id !== picture.id))}>Remove</Button></div>)}</div></div>}
+        <div className="mt-5"><PictureUploadField files={editFiles} disabled={editPictures.length + editFiles.length >= 3} onSelect={handleEditPictureSelection} onRemove={(index) => setEditFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} error={pictureError} label="Add pictures" /></div>
+        <div className="mt-6 flex justify-end gap-2"><Button variant="secondary" onClick={() => setEditTarget(null)}>Cancel</Button><Button onClick={async () => { try { await updateExemptionEvidence(editTarget.id, editReason); for (const picture of (pictureMap.get(editTarget.id) ?? []).filter((item) => !editPictures.some((current) => current.id === item.id))) await deleteExemptionPicture(picture.id, picture.storagePath); for (const file of editFiles) await uploadExemptionPicture(workspace as "APP" | "WAIS", editTarget.id, file); setEditTarget(null); await refreshAttendanceData(); if (workspace) setPictureMap(await loadExemptionPictures(workspace)); } catch (error) { setFeedback({ type: "error", message: error instanceof Error ? error.message : "Could not update exemption." }); } }}>Save</Button></div>
+      </Card></div>}
     </div>
   );
 }

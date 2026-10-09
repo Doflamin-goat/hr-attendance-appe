@@ -996,7 +996,7 @@ export async function restoreConvertedHalfDayToUndertime(id: string) {
 }
 
 export function validateExemptionPicture(file: File) {
-  if (!(file.type === "image/jpeg" || file.type === "image/png" || file.type === "image/webp")) throw new Error("Only JPG, JPEG, PNG, and WEBP images are accepted.");
+  if (!(file.type === "image/jpeg" || file.type === "image/png")) throw new Error("Only JPG, JPEG, and PNG images are allowed.");
   if (file.size > EXEMPTION_IMAGE_MAX_BYTES) throw new Error("Each picture must be 5 MB or smaller.");
 }
 
