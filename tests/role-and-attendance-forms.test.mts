@@ -13,6 +13,8 @@ import { attendanceDateValue, attendanceTimeValue, computeExcelColumnWidth, sort
 
 test("exemption evidence upload and gallery viewer remain scoped, accessible, and read-only for Admin", () => {
   const page = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  const approvals = readFileSync(new URL("../src/pages/AdminApprovals.tsx", import.meta.url), "utf8");
+  const gallery = readFileSync(new URL("../src/components/exemptions/ExemptionPictureGallery.tsx", import.meta.url), "utf8");
   const service = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
   assert.match(page, /type="file"[\s\S]*?className="sr-only"/);
   assert.match(page, /Drop pictures here or[\s\S]*?Browse/);
@@ -20,19 +22,25 @@ test("exemption evidence upload and gallery viewer remain scoped, accessible, an
   assert.match(page, /You can upload up to 3 pictures\./);
   assert.match(page, /max 5 MB each/i);
   assert.match(page, /SelectedPicturePreview/);
-  assert.match(page, /SavedPictureThumbnail/);
-  assert.match(page, /role="dialog" aria-modal="true"/);
-  assert.match(page, /max-w-5xl/);
-  assert.match(page, /object-contain/);
-  assert.match(page, /event\.key === "Escape"/);
-  assert.match(page, /event\.key === "ArrowLeft"/);
-  assert.match(page, /event\.key === "ArrowRight"/);
-  assert.match(page, /Picture \{index \+ 1\} of \{pictures\.length\}/);
-  assert.match(page, /aria-label="Close picture viewer"/);
+  assert.match(page, /ExemptionPictureGallery/);
+  assert.match(gallery, /role="dialog" aria-modal="true"/);
+  assert.match(gallery, /max-w-5xl/);
+  assert.match(gallery, /object-contain/);
+  assert.match(gallery, /event\.key === "Escape"/);
+  assert.match(gallery, /event\.key === "ArrowLeft"/);
+  assert.match(gallery, /event\.key === "ArrowRight"/);
+  assert.match(gallery, /Picture \{index \+ 1\} of \{pictures\.length\}/);
+  assert.match(gallery, /aria-label="Close picture viewer"/);
+  assert.match(gallery, /if \(pictures\.length === 0\) return null/);
   assert.match(page, /!readOnly && <Button[\s\S]*?>Edit<\/Button>/);
   assert.match(page, /editPictures\.length \+ editFiles\.length >= 3/);
   assert.match(page, /for \(const picture of \(pictureMap\.get\(editTarget\.id\) \?\? \[\]\)\.filter/);
   assert.match(page, /loadExemptionPictures\(workspace\)/);
+  assert.match(approvals, /loadExemptionPictures\(workspace\)/);
+  assert.equal((approvals.match(/<ExemptionPictureGallery /g) ?? []).length, 2, "pending and history cards both render the shared gallery");
+  assert.match(approvals, /Approve All Pending/);
+  assert.match(approvals, /reviewStagedExemption\(numericId, status/);
+  assert.doesNotMatch(approvals, /onRemove=/, "Admin approval galleries remain view-only");
   assert.match(service, /file\.type === "image\/jpeg" \|\| file\.type === "image\/png"/);
   assert.match(service, /Only JPG, JPEG, and PNG images are allowed\./);
   assert.match(service, /Each picture must be 5 MB or smaller\./);
