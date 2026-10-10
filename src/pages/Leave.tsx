@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { listEmployeeLeaveAdjustments, listLeaveRequests, submitLeaveRequest, type EmployeeLeaveAdjustment, type LeaveRequest } from "../services/leaveService";
 import { calculateLeaveDuration, formatLeaveRequestDuration, formatRemainingLeaveMinutes, requestableLeaveBalance } from "../utils/leaveRules";
 import { informedPeopleForScope } from "../utils/informedPeople";
+import { InformedPersonChips } from "../components/attendance/InformedPersonChips";
 
 export function Leave() {
   const { workspace, hrScope } = useAuth();
@@ -67,7 +68,7 @@ export function Leave() {
           <div className="grid grid-cols-2 gap-3"><Input label="Start Time" required type="time" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /><Input label="End Time" required type="time" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></div>
           <div className={`rounded-lg border px-3 py-2 text-sm ${duration.error ? "border-danger-100 bg-danger-50 text-danger-700" : "border-brand-100 bg-brand-50 text-brand-700"}`}>{duration.error ?? `Chargeable duration: ${formatLeaveRequestDuration(form.date, form.start, form.end, duration.minutes)}`}</div>
           <SearchableCombobox label="Who was informed" placeholder="Search or add a name" options={informedPeopleForScope(hrScope).filter((person) => !form.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setForm({ ...form, informed: [...form.informed, person.label] })} onCreateCustom={(person) => setForm({ ...form, informed: [...form.informed, person] })} />
-          <div className="flex flex-wrap gap-2">{form.informed.map((person) => <button type="button" key={person} onClick={() => setForm({ ...form, informed: form.informed.filter((item) => item !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700">{person} ×</button>)}</div>
+          <InformedPersonChips people={form.informed} onRemove={(person) => setForm({ ...form, informed: form.informed.filter((item) => item !== person) })} />
           <Textarea label="Reason for Leave" required value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} />
           <Button type="submit" fullWidth leftIcon={<Plus className="h-4 w-4" />}>Submit for Approval</Button>
         </form>

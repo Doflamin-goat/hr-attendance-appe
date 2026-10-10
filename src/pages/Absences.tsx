@@ -9,6 +9,7 @@ import { UserX, Plus, Trash2, Search, Pencil, SlidersHorizontal } from "lucide-r
 import { loadCrossWorkspaceAbsences } from "../services/attendanceService";
 import { matchesDateScope } from "../utils/attendanceForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
+import { InformedPersonChips } from "../components/attendance/InformedPersonChips";
 import type { AbsentRecord } from "../context/AttendanceContext";
 import {
   PageHeader,
@@ -217,7 +218,7 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
           <div>
             <div className="mt-2 space-y-2">
               <SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !editInformed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setEditInformed([...editInformed, person.label])} onCreateCustom={(person) => setEditInformed([...editInformed, person])} />
-              <div className="flex flex-wrap gap-2">{editInformed.map((person) => <button key={person} type="button" onClick={() => setEditInformed(editInformed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div>
+              <InformedPersonChips people={editInformed} onRemove={(person) => setEditInformed(editInformed.filter((value) => value !== person))} />
             </div>
           </div>
           <div className="flex justify-end gap-2">
@@ -272,7 +273,7 @@ export function Absences({ readOnly = false }: { readOnly?: boolean }) {
               />
 
               <div>
-                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><InformedPersonChips people={formData.informed} onRemove={(person) => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} /></div>
               </div>
 
               <Button

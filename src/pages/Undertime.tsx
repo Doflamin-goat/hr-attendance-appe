@@ -5,6 +5,7 @@ import { EmployeeAvatar } from "../components/employees/EmployeeAvatar";
 import { useAuth } from "../context/AuthContext";
 import { attendanceRecordRange, dateFilterDates, dateFilterMonths, dateFilterYears, formatDuration, formatTime12Hour, matchesDateFilters } from "../utils/attendanceForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
+import { InformedPersonChips } from "../components/attendance/InformedPersonChips";
 import { checkoutUndertimeMinutes } from "../utils/mainAttendance";
 import { listEligibleItcServices, moveItcGeneratedAttendanceToService, type ServiceEvent } from "../services/serviceService";
 import { MainMoveToService } from "../components/attendance/MainMoveToService";
@@ -383,7 +384,7 @@ export function Undertime() {
               />
 
               <div>
-                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><div className="flex flex-wrap gap-2">{informed.map((person) => <button key={person} type="button" onClick={() => setInformed(informed.filter((value) => value !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} Ãƒâ€”</button>)}</div></div>
+                <div className="mt-2 space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setInformed([...informed, person.label])} onCreateCustom={(person) => setInformed([...informed, person])} /><InformedPersonChips people={informed} onRemove={(person) => setInformed(informed.filter((value) => value !== person))} /></div>
               </div>
 
               <Button
@@ -539,7 +540,7 @@ export function Undertime() {
         <div className="mt-4 space-y-4">
           <Textarea label="Reason / Remarks" required value={editReason} onChange={(event) => setEditReason(event.target.value)} rows={3} />
           <SearchableCombobox label="Informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !editInformed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setEditInformed([...editInformed, person.label])} onCreateCustom={(person) => setEditInformed([...editInformed, person])} />
-          <div className="flex flex-wrap gap-2">{editInformed.map((person) => <button type="button" key={person} onClick={() => setEditInformed(editInformed.filter((item) => item !== person))} className="rounded-full bg-brand-50 px-3 py-1 text-xs text-brand-700">{person} Ã—</button>)}</div>
+          <InformedPersonChips people={editInformed} onRemove={(person) => setEditInformed(editInformed.filter((item) => item !== person))} />
           <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setEditTarget(null)}>Cancel</Button><Button onClick={() => void saveGeneratedEdit()}>Save Details</Button></div>
         </div>
       </Card>}

@@ -687,7 +687,7 @@ test("informed-person directory is scope-aware", () => {
   const main = informedPeopleForScope("MAIN");
   const itc = informedPeopleForScope("ITC");
   assert.deepEqual(main, ["HR Marj", "Ma'am Jen", "Ma'am Alexis", "Ma'am Arielle", "Ma'am Reina", "Sir Marc"]);
-  assert.deepEqual(itc, ["Sir Gatch", "Ma’am Chona", "HR Louissa"]);
+  assert.deepEqual(itc, ["Sir Gatch", "Ma'am Chona", "HR Louissa"]);
   assert.equal(main.includes("Sir Gatch"), false);
 });
 

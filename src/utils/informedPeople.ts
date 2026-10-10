@@ -9,7 +9,7 @@ const MAIN_INFORMED_PEOPLE = [
   "Sir Marc",
 ] as const;
 
-const ITC_INFORMED_PEOPLE = ["Sir Gatch", "Ma’am Chona", "HR Louissa"] as const;
+const ITC_INFORMED_PEOPLE = ["Sir Gatch", "Ma'am Chona", "HR Louissa"] as const;
 
 export function informedPeopleForScope(scope: HrScope | null): string[] {
   return scope === "MAIN" ? [...MAIN_INFORMED_PEOPLE] : [...ITC_INFORMED_PEOPLE];

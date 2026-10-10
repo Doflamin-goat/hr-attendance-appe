@@ -18,6 +18,7 @@ import type { ExemptionPicture } from "../context/AttendanceContext";
 import { ExemptionPictureGallery } from "../components/exemptions/ExemptionPictureGallery";
 import { describeSubmitExemptionError, filterExemptionHistory, formatOptionalReportedTime, matchingLinkedLateRecords } from "../utils/exemptionForms";
 import { informedPeopleForScope } from "../utils/informedPeople";
+import { InformedPersonChips } from "../components/attendance/InformedPersonChips";
 import {
   PageHeader,
   Card,
@@ -340,7 +341,7 @@ export function Exemptions() {
               {formData.employeeName && formData.date && matchingLates.length === 0 && <p className="-mt-2 text-xs text-slate-500">No active, unlinked uploaded late record matches this employee and date.</p>}
 
               <fieldset>
-              <div className="space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><div className="flex flex-wrap gap-2">{formData.informed.map((person) => <button key={person} type="button" onClick={() => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">{person} ×</button>)}</div></div>
+              <div className="space-y-2"><SearchableCombobox label="Add informed person (optional)" placeholder="Search or add a name" options={informedOptions.filter((person) => !formData.informed.includes(person)).map((person) => ({ id: person, label: person }))} onSelect={(person) => setFormData({ ...formData, informed: [...formData.informed, person.label] })} onCreateCustom={(person) => setFormData({ ...formData, informed: [...formData.informed, person] })} /><InformedPersonChips people={formData.informed} onRemove={(person) => setFormData({ ...formData, informed: formData.informed.filter((value) => value !== person) })} /></div>
               </fieldset>
 
               <Textarea
