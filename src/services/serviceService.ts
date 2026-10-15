@@ -124,8 +124,8 @@ export async function updateServiceEvent(id: string, input: ServiceEventInput) {
   if (error) throwServiceRpcError("update Service record", error);
 }
 
-export async function suggestServiceReference(): Promise<string> {
-  const { data, error } = await client().rpc("service_reference", { p_year: null });
+export async function suggestServiceReference(workspace: ServiceWorkspace): Promise<string> {
+  const { data, error } = await client().rpc("service_reference", { p_workspace: workspace, p_year: null });
   if (error) throwServiceRpcError("load Service reference", error);
   return String(data ?? "SR-0001");
 }

@@ -631,14 +631,14 @@ export async function loadCrossWorkspaceExemptionWorkflowData(workspace: Workspa
 }> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const [lateResult, exemptionResult] = await Promise.all([
-    supabase.from("late_records").select("id, workspace, employee_name, work_date, time_in, minutes_late, seconds_late, total_seconds_late, source_file_id, source_file_name, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
+    supabase.from("late_records").select("id, workspace, employee_id, employee_name, work_date, time_in, minutes_late, seconds_late, total_seconds_late, source_file_id, source_file_name, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
     supabase.from("exemptions").select("id, workspace, employee_id, employee_name, work_date, reason, minutes_late, reported_time, informed_parties, approval_status, late_record_id, reviewed_by, reviewed_at, review_remarks, late_restored_at, late_restored_by, source_type, date_rule_id, is_deleted").eq("workspace", workspace).eq("is_deleted", false),
   ]);
   if (lateResult.error) throw lateResult.error;
   if (exemptionResult.error) throw exemptionResult.error;
   return {
     lateRecords: (lateResult.data ?? []).map((record) => ({
-      id: rowId(record.id), name: record.employee_name, date: toDisplayDate(record.work_date), workDate: record.work_date ?? undefined, timeIn: record.time_in ?? "", minutesLate: record.minutes_late ?? 0, secondsLate: record.seconds_late ?? 0, totalSecondsLate: record.total_seconds_late ?? 0, sourceFileId: rowId(record.source_file_id), sourceFileName: record.source_file_name ?? "", sourceType: "excel-upload" as const, workspace: record.workspace as Workspace, isDeleted: record.is_deleted === true,
+      id: rowId(record.id), employeeId: record.employee_id == null ? undefined : rowId(record.employee_id), name: record.employee_name, date: toDisplayDate(record.work_date), workDate: record.work_date ?? undefined, timeIn: record.time_in ?? "", minutesLate: record.minutes_late ?? 0, secondsLate: record.seconds_late ?? 0, totalSecondsLate: record.total_seconds_late ?? 0, sourceFileId: rowId(record.source_file_id), sourceFileName: record.source_file_name ?? "", sourceType: "excel-upload" as const, workspace: record.workspace as Workspace, isDeleted: record.is_deleted === true,
     })),
     exemptions: (exemptionResult.data ?? []).map((item) => {
       const linkedLate = (lateResult.data ?? []).find((late) => rowId(late.id) === rowId(item.late_record_id));

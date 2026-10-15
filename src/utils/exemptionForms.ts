@@ -29,6 +29,7 @@ export function describeSubmitExemptionError(error: unknown): string {
 
 type MatchingLate = {
   id: string;
+  employeeId?: string;
   name: string;
   date: string;
   workDate?: string;
@@ -48,7 +49,8 @@ export function matchingLinkedLateRecords(
   records: MatchingLate[],
   exemptions: LinkedExemption[],
   employeeName: string,
-  workDate: string
+  workDate: string,
+  employeeId?: string,
 ) {
   const linkedLateIds = new Set(
     exemptions
@@ -60,7 +62,7 @@ export function matchingLinkedLateRecords(
   return records.filter((record) =>
     record.sourceType === "excel-upload" &&
     record.isDeleted === false &&
-    normalizeEmployeeName(record.name) === normalizeEmployeeName(employeeName) &&
+    (employeeId && record.employeeId ? record.employeeId === employeeId : normalizeEmployeeName(record.name) === normalizeEmployeeName(employeeName)) &&
     record.workDate === workDate &&
     !linkedLateIds.has(record.id)
   );

@@ -166,7 +166,7 @@ export function Exemptions() {
   const employeeOptions = useMemo(() => [...activeEmployees].sort((a, b) => a.fullName.localeCompare(b.fullName)), [activeEmployees]);
   const informedOptions = informedPeopleForScope(hrScope);
   const selectedEmployee = useMemo(() => activeEmployees.find((employee) => employee.id === formData.employeeId), [activeEmployees, formData.employeeId]);
-  const matchingLates = useMemo(() => matchingLinkedLateRecords(workflowData.lateRecords, workflowData.exemptions, selectedEmployee?.fullName ?? "", formData.date), [workflowData, formData.date, selectedEmployee?.fullName]);
+  const matchingLates = useMemo(() => matchingLinkedLateRecords(workflowData.lateRecords, workflowData.exemptions, selectedEmployee?.fullName ?? "", formData.date, selectedEmployee?.id), [workflowData, formData.date, selectedEmployee?.fullName, selectedEmployee?.id]);
   const selectedLate = matchingLates.find((item) => item.id === lateRecordId);
   const lateLabelCounts = useMemo(() => matchingLates.reduce((counts, late) => {
     const key = `${late.timeIn}|${late.minutesLate}`;

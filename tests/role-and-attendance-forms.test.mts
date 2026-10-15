@@ -1069,6 +1069,47 @@ test("migration 017 derives remaining leave from one year-specific adjustment an
   assert.match(migration, /extract\(year from leave_date\)=p_leave_year/);
 });
 
+test("migration 062 repairs and maintains employee leave adjustment workspace ownership", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/062_fix_leave_adjustment_workspace.sql", import.meta.url), "utf8");
+  assert.match(migration, /set workspace = e\.workspace[\s\S]*a\.workspace is distinct from e\.workspace/);
+  assert.match(migration, /expected_workspace := case[\s\S]*when e\.hr_scope = 'ITC' then 'APP'[\s\S]*when e\.hr_scope = 'MAIN' then 'WAIS'/);
+  assert.match(migration, /e\.workspace is distinct from expected_workspace/);
+  assert.match(migration, /on conflict \(employee_id, leave_year\) do update[\s\S]*set workspace = excluded\.workspace/);
+  assert.match(migration, /new_adjustment := p_remaining_minutes \+ approved_minutes - 2400/);
+  assert.doesNotMatch(migration, /status = 'pending'/);
+  assert.match(migration, /revoke all on function public\.set_employee_remaining_leave/);
+  assert.match(migration, /grant execute on function public\.set_employee_remaining_leave/);
+});
+
+test("MAIN Service references and exemption matching stay workspace and employee scoped", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/063_fix_workspace_service_reference_and_main_late_matching.sql", import.meta.url), "utf8");
+  const attendance = readFileSync(new URL("../src/services/attendanceService.ts", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/Exemptions.tsx", import.meta.url), "utf8");
+  assert.match(migration, /service_events\(workspace, service_ref\)/);
+  assert.match(migration, /service_reference\(p_workspace text/);
+  assert.match(migration, /where workspace=p_workspace and is_deleted=false/);
+  assert.match(attendance, /select\("id, workspace, employee_id, employee_name, work_date/);
+  assert.match(page, /matchingLinkedLateRecords\(workflowData\.lateRecords, workflowData\.exemptions, selectedEmployee\?\.fullName \?\? "", formData\.date, selectedEmployee\?\.id\)/);
+});
+
+test("migration 064 backfills only unambiguous MAIN late employee identities", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/064_fix_main_late_employee_identity.sql", import.meta.url), "utf8");
+  assert.match(migration, /l2\.workspace = 'WAIS'/);
+  assert.match(migration, /l2\.employee_id is null/);
+  assert.match(migration, /having count\(distinct d\.employee_id\) = 1/);
+  assert.match(migration, /d\.source_file_id::text = l2\.source_file_id::text/);
+  assert.match(migration, /create trigger trg_resolve_main_late_employee/);
+  assert.match(migration, /candidate_count = 1/);
+});
+
+test("migration 065 submits MAIN exemptions by canonical late employee UUID", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/065_fix_exemption_submit_employee_identity.sql", import.meta.url), "utf8");
+  assert.match(migration, /l\.employee_id is not null and l\.employee_id is distinct from e\.id/);
+  assert.match(migration, /l\.employee_id is null and public\.employee_name_key/);
+  assert.match(migration, /l\.workspace is distinct from public\.attendance_workspace\(\)/);
+  assert.match(migration, /insert into public\.exemptions/);
+  assert.match(migration, /approval_status, submitted_by/);
+});
 test("leave cancellation, approved removal, and active duplicate protection are enforced", () => {
   const page = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
   const service = readFileSync(new URL("../src/services/leaveService.ts", import.meta.url), "utf8");
