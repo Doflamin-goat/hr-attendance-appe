@@ -59,6 +59,12 @@ test("remaining leave display describes zero without changing other duration lab
   assert.equal(formatLeaveMinutes(0), "0 minutes", "generic usage/duration formatter is unchanged");
 });
 
+test("normalized remaining leave display keeps zero empty-balance wording", async () => {
+  const rules = await import("../src/utils/leaveRules.ts");
+  assert.equal(rules.formatLeaveNormalizedUnits(0), "No leave remaining");
+  assert.equal(rules.formatLeaveNormalizedUnits(7200), "1 day");
+});
+
 test("remaining leave presentation preserves entitlement, approved/pending totals and adjustments", () => {
   const records = [
     { leaveDate: "2026-09-21", status: "approved" as const, durationMinutes: 2400 },
@@ -67,13 +73,12 @@ test("remaining leave presentation preserves entitlement, approved/pending total
     { leaveDate: "2025-09-21", status: "approved" as const, durationMinutes: 480 },
   ];
   const totals = calculateAnnualLeaveTotals(records, 2026, 0);
-  assert.deepEqual(totals, { adjustment: 0, approved: 2400, pending: 120, remaining: 0 });
+  assert.equal(totals.adjustment, 0); assert.equal(totals.approved, 2400); assert.equal(totals.pending, 120); assert.equal(totals.remaining, 0);
   assert.equal(formatRemainingLeaveMinutes(totals.remaining), "No leave remaining");
-  assert.deepEqual(calculateAnnualLeaveTotals(records, 2026, 270), {
-    adjustment: 270, approved: 2400, pending: 120, remaining: 270,
-  });
+  const adjusted = calculateAnnualLeaveTotals(records, 2026, 270);
+  assert.equal(adjusted.adjustment, 270); assert.equal(adjusted.approved, 2400); assert.equal(adjusted.pending, 120); assert.equal(adjusted.remaining, 270);
   assert.equal(ANNUAL_LEAVE_ENTITLEMENT_MINUTES, 2400);
-  assert.equal(calculateLeaveDuration("2026-09-26", "07:00", "15:15").minutes, 495);
+  assert.equal(calculateLeaveDuration("2026-09-26", "07:00", "15:15").minutes, 450);
   assert.equal(leaveBalance(0, 2500), 0);
   assert.equal(remainingLeaveAdjustment(270, 2400), 270);
   assert.equal(requestableLeaveBalance(0, 2400, 0), 0);
@@ -84,7 +89,7 @@ test("remaining leave presentation preserves entitlement, approved/pending total
 test("ITC leave submission reserves pending minutes without changing approved arithmetic", () => {
   const page = readFileSync(new URL("../src/pages/Leave.tsx", import.meta.url), "utf8");
   const migration = readFileSync(new URL("../supabase/migrations/039_itc_leave_balance_and_undertime_details.sql", import.meta.url), "utf8");
-  assert.match(page, /requestableLeaveBalance\(adjustment, approved, pending\)/);
+  assert.match(page, /requestableLeaveBalanceUnitsForRecords\(/);
   assert.match(page, /No leave balance remaining for this employee/);
   assert.match(page, /Requested leave exceeds the available balance/);
   assert.match(migration, /status='pending'[\s\S]*?pending_minutes/);
@@ -810,15 +815,36 @@ test("leave duration uses working minutes and excludes weekday lunch", () => {
 });
 
 test("leave presentation formats Saturday full-day, dates, times, and statuses professionally", () => {
-  assert.deepEqual(calculateLeaveDuration("2026-09-12", "07:00", "15:15"), { minutes: 495, error: null });
-  assert.equal(formatLeaveRequestDuration("2026-09-12", "07:00", "15:15", 495), "1 day");
-  assert.equal(formatLeaveRequestDuration("2026-09-12", "07:00", "15:00", 480), "1 day");
+  assert.deepEqual(calculateLeaveDuration("2026-09-12", "07:00", "15:15"), { minutes: 450, error: null });
+  assert.equal(formatLeaveRequestDuration("2026-09-12", "07:00", "15:15", 450), "1 day");
+  assert.equal(formatLeaveRequestDuration("2026-09-12", "07:00", "15:00", 480), "7 hours 15 minutes");
   assert.equal(formatLeaveDate("2026-09-12"), "09/12/2026");
   assert.equal(formatLeaveTime("07:00"), "07:00 AM");
   assert.equal(formatLeaveTime("15:15"), "03:15 PM");
   assert.equal(formatLeaveStatus("approved"), "Approved");
   assert.equal(formatLeaveStatus("pending"), "Pending");
   assert.equal(formatLeaveStatus("rejected"), "Rejected");
+});
+
+test("leave normalization keeps weekday and Saturday full days equal without fractional drift", () => {
+  const weekday = calculateLeaveDuration("2026-10-16", "08:00", "17:00").minutes;
+  const saturday = calculateLeaveDuration("2026-10-17", "07:00", "15:15").minutes;
+  assert.equal(weekday, 480);
+  assert.equal(saturday, 450);
+  assert.equal(calculateAnnualLeaveTotals([
+    { leaveDate: "2026-10-16", status: "approved", durationMinutes: weekday },
+    { leaveDate: "2026-10-17", status: "approved", durationMinutes: saturday },
+  ], 2026, 0).remaining, 1440);
+});
+
+test("schedule-aware leave migration preserves actual minutes and normalized units", () => {
+  const sql = readFileSync("supabase/migrations/066_schedule_aware_leave_balance.sql", "utf8");
+  assert.match(sql, /add column if not exists normalized_units integer/i);
+  assert.match(sql, /case when extract\(dow from p_leave_date\) = 6 then 16 else 15 end/i);
+  assert.match(sql, /09:00/);
+  assert.match(sql, /12:30/);
+  assert.match(sql, /36000/);
+  assert.match(readFileSync("supabase/leave_saturday_correction_preview.sql", "utf8"), /^-- READ-ONLY/m);
 });
 
 test("leave balances use exact minutes and calendar-year records", () => {
@@ -937,8 +963,10 @@ test("annual leave totals isolate years and only approved leave reduces remainin
     { leaveDate: "2026-04-01", status: "rejected" as const, durationMinutes: 480 },
     { leaveDate: "2027-01-01", status: "approved" as const, durationMinutes: 480 },
   ];
-  assert.deepEqual(calculateAnnualLeaveTotals(records, 2026, -480), { adjustment: -480, approved: 240, pending: 480, remaining: 1680 });
-  assert.deepEqual(calculateAnnualLeaveTotals(records, 2027, 0), { adjustment: 0, approved: 480, pending: 0, remaining: 1920 });
+  const totals2026 = calculateAnnualLeaveTotals(records, 2026, -480);
+  assert.equal(totals2026.adjustment, -480); assert.equal(totals2026.approved, 240); assert.equal(totals2026.pending, 480); assert.equal(totals2026.remaining, 1680);
+  const totals2027 = calculateAnnualLeaveTotals(records, 2027, 0);
+  assert.equal(totals2027.adjustment, 0); assert.equal(totals2027.approved, 480); assert.equal(totals2027.pending, 0); assert.equal(totals2027.remaining, 1920);
 });
 
 test("leave informed-person validation uses selected chips instead of the search input", () => {
@@ -964,8 +992,8 @@ test("leave registry starts from all active employees and keeps request history 
   assert.doesNotMatch(registry, />Prior Used Leave</);
   assert.doesNotMatch(registry, />Reviewer</);
   assert.doesNotMatch(registry, /item\.reviewedBy/);
-  assert.match(registry, /value\.approved > 0 \? formatLeaveMinutes\(value\.approved\) : ""/);
-  assert.match(registry, /value\.pending > 0 \? formatLeaveMinutes\(value\.pending\) : ""/);
+  assert.match(registry, /value\.approvedUnits > 0 \? formatLeaveNormalizedUnits\(value\.approvedUnits\) : ""/);
+  assert.match(registry, /value\.pendingUnits > 0 \? formatLeaveNormalizedUnits\(value\.pendingUnits\) : ""/);
   assert.doesNotMatch(admin, /Submitted by:/);
   assert.match(registry, /Edit Remaining Leave/);
   assert.doesNotMatch(registry, /Opening\/Prior Leave Used/);
